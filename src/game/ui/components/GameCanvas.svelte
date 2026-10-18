@@ -4,7 +4,7 @@
   import { Game } from "../../core/Game";
   import TilePicker from "./TilePicker.svelte";
 
-  import type { ToolId } from '../../tools/types';
+  import type { ToolId } from "../../modes/construction/tools/types";
   import type { UIConfig } from "../../ui/types";
   import type { GameModeId } from "@/game/modes/GameMode";
 

@@ -5,53 +5,55 @@ import {
   ArcRotateCamera,
   Vector3,
   HemisphericLight,
-  MeshBuilder,
-  StandardMaterial,
-  Color3,
-  PointerEventTypes
+  PointerEventTypes,
 } from "babylonjs";
-import { GridManager } from "../simulation/GridManager";
-import { WorldRenderer } from "../rendering/WorldRenderer";
-import { DebugRenderer } from "../rendering/DebugRenderer";
-import { worldToGrid } from "../utils/coordinates";
-import { TileHighlight } from "../rendering/TileHighlght";
-import { ToolManager } from "../tools/ToolManager";
-import { UIManager } from "../ui/UIManager";
-import type { ToolId } from "../tools/types";
-import type { UIConfig } from "../ui/types";
-import { TileRenderer } from "../rendering/TileRenderer";
-import { GameModeManager } from "../modes/GameModeManager";
-import { NormalMode } from "../modes/NormalMode";
-import { ConstructionMode } from "../modes/ConstructionMode";
 
-import { RoadBuilderTool } from "../tools/RoadBuilderTool";
-import { TilePaintTool } from "../tools/TilePaintTool";
-import type { GameModeId } from "../modes/GameMode";
+import { GridManager } from "../simulation/GridManager";
 import type { Tile } from "../simulation/Tile";
 
-export class Game {
-  private engine: Engine;
-  private scene: Scene;
-  private canvas: HTMLCanvasElement;
-  private gridManager: GridManager;
-  private worldRenderer: WorldRenderer;
-  private debugRenderer: DebugRenderer;
-  private tileHighlight: TileHighlight;
-  private toolManager: ToolManager;
-  private uiManager: UIManager;
-  private tileRenderer: TileRenderer;
-  private modeManager: GameModeManager;
+import { WorldRenderer } from "../rendering/WorldRenderer";
+import { DebugRenderer } from "../rendering/DebugRenderer";
+import { TileHighlight } from "../rendering/TileHighlght";
+import { TileRenderer } from "../rendering/TileRenderer";
 
-  private resizeHandler: () => void;
+import { worldToGrid } from "../utils/coordinates";
+
+import { UIManager } from "../ui/UIManager";
+import type { UIConfig } from "../ui/types";
+
+import { GameModeManager } from "../modes/GameModeManager";
+import { NormalMode } from "../modes/NormalMode";
+import { ConstructionMode } from "../modes/construction/ConstructionMode";
+
+import type { GameModeId } from "../modes/GameMode";
+import type { ToolId } from "../modes/construction/tools/types";
+
+export class Game {
+  private readonly engine: Engine;
+  private readonly scene: Scene;
+  private readonly canvas: HTMLCanvasElement;
+
+  private readonly gridManager: GridManager;
+
+  private readonly worldRenderer: WorldRenderer;
+  private readonly debugRenderer: DebugRenderer;
+  private readonly tileHighlight: TileHighlight;
+  private readonly tileRenderer: TileRenderer;
+
+  private readonly uiManager: UIManager;
+
+  private readonly modeManager: GameModeManager;
+  private readonly constructionMode: ConstructionMode;
+
+  private readonly resizeHandler: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
-    // Inicializar el mundo lógico
+    // Mundo lógico
     this.gridManager = new GridManager(20, 20);
 
-    
-    // 1. Inicializar motor y escena
+    // Motor y escena
     this.engine = new Engine(this.canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
@@ -59,73 +61,55 @@ export class Game {
 
     this.scene = new Scene(this.engine);
 
-    this.worldRenderer = new WorldRenderer(this.scene, this.gridManager);
+    // Renderizadores
+    this.worldRenderer = new WorldRenderer(
+      this.scene,
+      this.gridManager,
+    );
+
     this.debugRenderer = new DebugRenderer(this.scene);
+
     this.tileHighlight = new TileHighlight(
-      this.scene, 
+      this.scene,
       this.gridManager.width,
-      this.gridManager.height
-    )
+      this.gridManager.height,
+    );
+
     this.tileRenderer = new TileRenderer(
       this.scene,
-      this.gridManager
-    )
-
-    this.toolManager = new ToolManager();
-
-    this.toolManager.register(
-      new RoadBuilderTool(this.gridManager),
+      this.gridManager,
     );
 
-    this.toolManager.register(
-      new TilePaintTool("house", "house", this.gridManager),
-    );
-
-    this.toolManager.register(
-      new TilePaintTool("forest", "forest", this.gridManager),
-    );
-
-    this.toolManager.register(
-      new TilePaintTool("mineral", "mineral", this.gridManager),
-    );
-
-    this.toolManager.register(
-      new TilePaintTool("erase", "empty", this.gridManager),
-    );
-
-    this.toolManager.selectTool("road");
-
+    // Modos
     this.modeManager = new GameModeManager();
 
-    this.modeManager.register(new NormalMode());
+    this.constructionMode = new ConstructionMode(
+      this.gridManager,
 
-    this.modeManager.register(
-      new ConstructionMode(
-        this.toolManager,
-        (x, y) => {
-          const tile = this.gridManager.getTile(x, y);
-          if (tile) {
-            // Aquí llama al método que ya utilizas
-            // para mostrar el highlight.
-          }
-        },
-        () => {
-          // Aquí llama al método que ya utilizas
-          // para ocultar el highlight.
-        },
-      ),
+      (x, y) => {
+        const tile = this.gridManager.getTile(x, y);
+
+        if (tile) {
+          this.tileHighlight.show(x, y);
+        }
+      },
+
+      () => {
+        this.tileHighlight.hide();
+      },
     );
 
+    this.modeManager.register(new NormalMode());
+    this.modeManager.register(this.constructionMode);
     this.modeManager.selectMode("construction");
 
-
+    // Configuración de UI
     this.uiManager = new UIManager({
       components: {
         tilePicker: true,
         infoPanel: false,
         modal: false,
       },
-
       availableTools: [
         "road",
         "house",
@@ -135,17 +119,14 @@ export class Game {
       ],
     });
 
-
-
-    // 2. Configurar escena
+    // Escena y eventos
     this.initializeScene();
-
     this.setupPointerEvents();
 
-    // 3. Iniciar renderizado
+    // Renderizado
     this.startRenderLoop();
 
-    // 4. Registrar resize
+    // Resize
     this.resizeHandler = () => {
       this.engine.resize();
     };
@@ -153,8 +134,11 @@ export class Game {
     window.addEventListener("resize", this.resizeHandler);
   }
 
+  // --------------------------------------------------
+  // Escena
+  // --------------------------------------------------
+
   private initializeScene(): void {
-    // Cámara
     const camera = new ArcRotateCamera(
       "camera",
       -Math.PI / 2,
@@ -168,7 +152,6 @@ export class Game {
     camera.lowerRadiusLimit = 2;
     camera.upperRadiusLimit = 50;
 
-    // Iluminación
     const light = new HemisphericLight(
       "light",
       new Vector3(0, 1, 0),
@@ -176,41 +159,12 @@ export class Game {
     );
 
     light.intensity = 0.7;
-
-    // Esfera de prueba
-    /*
-    const sphere = MeshBuilder.CreateSphere(
-      "sphere",
-      { diameter: 2, segments: 32 },
-      this.scene,
-    );
-    */
-
-
-    //// Crear un cubo perfecto (todos los lados iguales)
-    /*const cube = MeshBuilder.CreateBox("miCubo", { size: 2 }, this.scene);
-
-    cube.position.y = 1;
-
-    const cubeMaterial = new StandardMaterial(
-      "cubeMat",
-      this.scene,
-    );
-
-    cubeMaterial.diffuseColor = new Color3(0.6, 0.2, 0.8);
-    cube.material = cubeMaterial;
-*/
-    // Animación de prueba
-    this.scene.onBeforeRenderObservable.add(() => {
-      const deltaTime = this.engine.getDeltaTime() / 1000;
-
-     // cube.rotation.y += deltaTime;
-    });
   }
 
-  
-  
-  
+  // --------------------------------------------------
+  // Eventos del puntero
+  // --------------------------------------------------
+
   private setupPointerEvents(): void {
     this.scene.onPointerObservable.add((pointerInfo) => {
       switch (pointerInfo.type) {
@@ -227,20 +181,22 @@ export class Game {
         }
 
         case PointerEventTypes.POINTERDOWN: {
-          // Solo botón izquierdo
-          if (pointerInfo.event.button !== 0) return;
+          if (pointerInfo.event.button !== 0) {
+            return;
+          }
 
           const tile = this.getTileUnderPointer();
-          if (!tile) return;
 
-          // Delegar la acción al modo activo
+          if (!tile) {
+            return;
+          }
+
           const modified = this.modeManager.onTileClick(
             tile.x,
-            tile.y
+            tile.y,
           );
 
           if (modified) {
-            // Actualizar la tile y sus vecinas
             this.updateTileAndNeighbors(tile.x, tile.y);
           }
 
@@ -250,37 +206,44 @@ export class Game {
     });
   }
 
+  // --------------------------------------------------
+  // Picking
+  // --------------------------------------------------
 
-  
   private getTileUnderPointer(): Tile | null {
-    // Lanzar un rayo desde el ratón hacia el suelo
     const pick = this.scene.pick(
       this.scene.pointerX,
       this.scene.pointerY,
-      (mesh) => mesh.name === "ground"
+      (mesh) => mesh.name === "ground",
     );
 
     if (!pick?.hit || !pick.pickedPoint) {
       return null;
     }
 
-    // Posición del ratón en el mundo 3D
     const { x, z } = pick.pickedPoint;
 
-    // Convertir coordenadas del mundo a coordenadas del grid
     const coords = worldToGrid(
       x,
       z,
       this.gridManager.width,
-      this.gridManager.height
+      this.gridManager.height,
     );
 
-    // Obtener la celda
-    return this.gridManager.getTile(coords.x, coords.y);
+    return this.gridManager.getTile(
+      coords.x,
+      coords.y,
+    );
   }
 
-  
-  private updateTileAndNeighbors(x: number, y: number): void {
+  // --------------------------------------------------
+  // Actualización visual
+  // --------------------------------------------------
+
+  private updateTileAndNeighbors(
+    x: number,
+    y: number,
+  ): void {
     const positions = [
       { x, y },
       { x, y: y - 1 },
@@ -301,7 +264,9 @@ export class Game {
     }
   }
 
-
+  // --------------------------------------------------
+  // Render loop
+  // --------------------------------------------------
 
   private startRenderLoop(): void {
     this.engine.runRenderLoop(() => {
@@ -309,6 +274,9 @@ export class Game {
     });
   }
 
+  // --------------------------------------------------
+  // Modos
+  // --------------------------------------------------
 
   public selectMode(id: GameModeId): void {
     this.modeManager.selectMode(id);
@@ -318,33 +286,49 @@ export class Game {
     return this.modeManager.getActiveMode();
   }
 
+  // --------------------------------------------------
+  // Herramientas de construcción
+  // --------------------------------------------------
+
+  public selectTool(tool: ToolId): void {
+    this.constructionMode.selectTool(tool);
+  }
+
+  public getActiveTool(): ToolId | null {
+    return this.constructionMode.getActiveTool();
+  }
+
+  // --------------------------------------------------
+  // Teclado
+  // --------------------------------------------------
+
   public onKeyDown(event: KeyboardEvent): boolean {
     return this.modeManager.onKeyDown(event);
   }
 
-
-  public selectTool(tool: ToolId): void {
-    this.toolManager.selectTool(tool);
-  }
-
-  public getActiveTool(): ToolId | null {
-    return this.toolManager.getActiveTool();
-  }
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
 
   public getUIConfig(): UIConfig {
     return this.uiManager.getConfig();
   }
 
+  // --------------------------------------------------
+  // Limpieza
+  // --------------------------------------------------
+
   public dispose(): void {
-    // Detener el renderizado
     this.engine.stopRenderLoop();
 
-    // Eliminar listener de resize
-    window.removeEventListener("resize", this.resizeHandler);
+    window.removeEventListener(
+      "resize",
+      this.resizeHandler,
+    );
 
-    // Liberar recursos de Babylon.js
+    this.modeManager.dispose();
+
     this.scene.dispose();
     this.engine.dispose();
-    this.modeManager.dispose();
   }
 }

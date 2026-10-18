@@ -1,6 +1,6 @@
 
 import type { TileType } from "../simulation/Tile";
-import type { ToolId } from "../tools/types";
+import type { ToolId } from "../modes/construction/tools/types";
 
 export type EditorTool =
   | { kind: "paint"; tileType: TileType }

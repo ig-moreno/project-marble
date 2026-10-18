@@ -1,7 +1,6 @@
 
 <script lang="ts">
-  import type { ToolId } from "../../tools/types";
-
+  import type { ToolId } from "../../modes/construction/tools/types"; 
   interface Props {
     tools: ToolId[];
     activeTool: ToolId | null;

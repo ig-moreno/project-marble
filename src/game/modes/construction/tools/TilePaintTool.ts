@@ -1,8 +1,8 @@
 
-import type { GridManager } from "../simulation/GridManager";
+import type { GridManager } from "../../../simulation/GridManager";
 
-import { disconnectRoad } from "../simulation/road/RoadUtils";
-import { createTile, type TileType } from "../simulation/Tile";
+import { disconnectRoad } from "../../../simulation/road/RoadUtils";
+import { createTile, type TileType } from "../../../simulation/Tile";
 
 import type { GameTool } from "./GameTool";
 import type { ToolId } from "./types";

@@ -1,7 +1,7 @@
 
-import type { GridManager } from "../simulation/GridManager";
-import { createTile } from "../simulation/Tile";
-import { connectRoads } from "../simulation/road/RoadUtils";
+import type { GridManager } from "../../../simulation/GridManager";
+import { createTile } from "../../../simulation/Tile";
+import { connectRoads } from "../../../simulation/road/RoadUtils";
 import type { GameTool } from "./GameTool";
 
 export class RoadBuilderTool implements GameTool {
