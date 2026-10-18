@@ -11,8 +11,15 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tsconfig/svelte": "^5.0.8",
     "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
     "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
     "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "babylonjs": "^9.31.0",
+    "svelte-routing": "^2.13.0"
   }
 }
