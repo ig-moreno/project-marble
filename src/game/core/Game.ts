@@ -5,18 +5,15 @@ import {
   ArcRotateCamera,
   Vector3,
   HemisphericLight,
-  PointerEventTypes,
 } from "babylonjs";
 
 import { GridManager } from "../simulation/GridManager";
-import type { Tile } from "../simulation/Tile";
 
 import { WorldRenderer } from "../rendering/WorldRenderer";
 import { DebugRenderer } from "../rendering/DebugRenderer";
 import { TileHighlight } from "../rendering/TileHighlght";
 import { TileRenderer } from "../rendering/TileRenderer";
-
-import { worldToGrid } from "../utils/coordinates";
+import { VehicleRenderer } from "../rendering/VehicleRenderer";
 
 import { UIManager } from "../ui/UIManager";
 import type { UIConfig } from "../ui/types";
@@ -25,35 +22,108 @@ import { GameModeManager } from "../modes/GameModeManager";
 import { NormalMode } from "../modes/NormalMode";
 import { ConstructionMode } from "../modes/construction/ConstructionMode";
 
+import { InputManager } from "../input/InputManager";
+
+import { SimulationManager } from "../simulation/SimulationManager";
+import { VehicleManager } from "../simulation/vehicles/VehicleManager";
+import { findRoadPath } from "../simulation/vehicles/RoadPathFinder";
+
 import type { GameModeId } from "../modes/GameMode";
 import type { ToolId } from "../modes/construction/tools/types";
 
+import { PauseMenuManager } from "../ui/pause/PauseMenuManager";
+
+import type {
+  PauseMenuActionId,
+  PauseMenuContext,
+  PauseMenuOption,
+  PauseMenuState,
+} from "../ui/pause/types";
+
 export class Game {
+  // ==================================================
+  // BABYLON
+  // ==================================================
+
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly canvas: HTMLCanvasElement;
 
+  private readonly camera: ArcRotateCamera;
+
+  // ==================================================
+  // MUNDO
+  // ==================================================
+
   private readonly gridManager: GridManager;
+
+  // ==================================================
+  // RENDERIZADO
+  // ==================================================
 
   private readonly worldRenderer: WorldRenderer;
   private readonly debugRenderer: DebugRenderer;
   private readonly tileHighlight: TileHighlight;
   private readonly tileRenderer: TileRenderer;
+  private readonly vehicleRenderer: VehicleRenderer;
 
-  private readonly uiManager: UIManager;
+  // ==================================================
+  // SIMULACIÓN
+  // ==================================================
+
+  private readonly simulationManager: SimulationManager;
+  private readonly vehicleManager: VehicleManager;
+
+  // ==================================================
+  // MODOS Y HERRAMIENTAS
+  // ==================================================
 
   private readonly modeManager: GameModeManager;
   private readonly constructionMode: ConstructionMode;
 
+  // ==================================================
+  // INPUT Y UI
+  // ==================================================
+
+  private readonly inputManager: InputManager;
+  private readonly uiManager: UIManager;
+
+  // ==================================================
+  // PAUSA
+  // ==================================================
+
+  private readonly pauseMenuManager = new PauseMenuManager();
+
+  private pauseMenuOpen = false;
+  private wasPausedBeforeMenu = false;
+
+  private readonly pauseMenuListeners = new Set<
+    (state: PauseMenuState) => void
+  >();
+
+  // ==================================================
+  // EVENTOS
+  // ==================================================
+
   private readonly resizeHandler: () => void;
+
+  // ==================================================
+  // CONSTRUCTOR
+  // ==================================================
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
+    // --------------------------------------------------
     // Mundo lógico
+    // --------------------------------------------------
+
     this.gridManager = new GridManager(20, 20);
 
-    // Motor y escena
+    // --------------------------------------------------
+    // Babylon.js
+    // --------------------------------------------------
+
     this.engine = new Engine(this.canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
@@ -61,7 +131,16 @@ export class Game {
 
     this.scene = new Scene(this.engine);
 
+    // --------------------------------------------------
+    // Escena y cámara
+    // --------------------------------------------------
+
+    this.camera = this.initializeScene();
+
+    // --------------------------------------------------
     // Renderizadores
+    // --------------------------------------------------
+
     this.worldRenderer = new WorldRenderer(
       this.scene,
       this.gridManager,
@@ -80,7 +159,30 @@ export class Game {
       this.gridManager,
     );
 
+    this.vehicleRenderer = new VehicleRenderer(
+      this.scene,
+      this.gridManager.width,
+      this.gridManager.height,
+    );
+
+    // --------------------------------------------------
+    // Simulación
+    // --------------------------------------------------
+
+    this.simulationManager = new SimulationManager();
+
+    this.vehicleManager = new VehicleManager(
+      this.gridManager,
+    );
+
+    this.simulationManager.register((deltaTime) => {
+      this.vehicleManager.update(deltaTime);
+    });
+
+    // --------------------------------------------------
     // Modos
+    // --------------------------------------------------
+
     this.modeManager = new GameModeManager();
 
     this.constructionMode = new ConstructionMode(
@@ -101,15 +203,20 @@ export class Game {
 
     this.modeManager.register(new NormalMode());
     this.modeManager.register(this.constructionMode);
+
     this.modeManager.selectMode("construction");
 
-    // Configuración de UI
+    // --------------------------------------------------
+    // UI
+    // --------------------------------------------------
+
     this.uiManager = new UIManager({
       components: {
         tilePicker: true,
         infoPanel: false,
         modal: false,
       },
+
       availableTools: [
         "road",
         "house",
@@ -119,26 +226,68 @@ export class Game {
       ],
     });
 
-    // Escena y eventos
-    this.initializeScene();
-    this.setupPointerEvents();
+    // --------------------------------------------------
+    // Input
+    // --------------------------------------------------
 
-    // Renderizado
+    this.inputManager = new InputManager(
+      this.scene,
+      this.canvas,
+      this.gridManager,
+      this.modeManager,
+
+      // Tile modificada
+      (x, y) => {
+        this.updateTileAndNeighbors(x, y);
+      },
+
+      // Teclado no consumido por el modo activo
+      (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          this.openPauseMenu();
+        }
+      },
+
+      // Bloquear interacciones cuando hay un modal
+      () => this.pauseMenuOpen,
+
+      // Teclado cuando el menú está abierto
+      (event) => {
+        if (event.key === "Escape") {
+          this.closePauseMenu();
+          return true;
+        }
+
+        return false;
+      },
+    );
+
+    // --------------------------------------------------
+    // Render loop
+    // --------------------------------------------------
+
     this.startRenderLoop();
 
+    // --------------------------------------------------
     // Resize
+    // --------------------------------------------------
+
     this.resizeHandler = () => {
       this.engine.resize();
     };
 
-    window.addEventListener("resize", this.resizeHandler);
+    window.addEventListener(
+      "resize",
+      this.resizeHandler,
+    );
   }
 
-  // --------------------------------------------------
-  // Escena
-  // --------------------------------------------------
+  // ==================================================
+  // ESCENA
+  // ==================================================
 
-  private initializeScene(): void {
+  private initializeScene(): ArcRotateCamera {
     const camera = new ArcRotateCamera(
       "camera",
       -Math.PI / 2,
@@ -149,6 +298,7 @@ export class Game {
     );
 
     camera.attachControl(this.canvas, true);
+
     camera.lowerRadiusLimit = 2;
     camera.upperRadiusLimit = 50;
 
@@ -159,86 +309,13 @@ export class Game {
     );
 
     light.intensity = 0.7;
+
+    return camera;
   }
 
-  // --------------------------------------------------
-  // Eventos del puntero
-  // --------------------------------------------------
-
-  private setupPointerEvents(): void {
-    this.scene.onPointerObservable.add((pointerInfo) => {
-      switch (pointerInfo.type) {
-        case PointerEventTypes.POINTERMOVE: {
-          const tile = this.getTileUnderPointer();
-
-          if (tile) {
-            this.modeManager.onTileHover(tile.x, tile.y);
-          } else {
-            this.modeManager.onTileLeave();
-          }
-
-          break;
-        }
-
-        case PointerEventTypes.POINTERDOWN: {
-          if (pointerInfo.event.button !== 0) {
-            return;
-          }
-
-          const tile = this.getTileUnderPointer();
-
-          if (!tile) {
-            return;
-          }
-
-          const modified = this.modeManager.onTileClick(
-            tile.x,
-            tile.y,
-          );
-
-          if (modified) {
-            this.updateTileAndNeighbors(tile.x, tile.y);
-          }
-
-          break;
-        }
-      }
-    });
-  }
-
-  // --------------------------------------------------
-  // Picking
-  // --------------------------------------------------
-
-  private getTileUnderPointer(): Tile | null {
-    const pick = this.scene.pick(
-      this.scene.pointerX,
-      this.scene.pointerY,
-      (mesh) => mesh.name === "ground",
-    );
-
-    if (!pick?.hit || !pick.pickedPoint) {
-      return null;
-    }
-
-    const { x, z } = pick.pickedPoint;
-
-    const coords = worldToGrid(
-      x,
-      z,
-      this.gridManager.width,
-      this.gridManager.height,
-    );
-
-    return this.gridManager.getTile(
-      coords.x,
-      coords.y,
-    );
-  }
-
-  // --------------------------------------------------
-  // Actualización visual
-  // --------------------------------------------------
+  // ==================================================
+  // ACTUALIZACIÓN VISUAL
+  // ==================================================
 
   private updateTileAndNeighbors(
     x: number,
@@ -264,21 +341,34 @@ export class Game {
     }
   }
 
-  // --------------------------------------------------
-  // Render loop
-  // --------------------------------------------------
+  // ==================================================
+  // RENDER LOOP
+  // ==================================================
 
   private startRenderLoop(): void {
     this.engine.runRenderLoop(() => {
+      const deltaTime = this.engine.getDeltaTime() / 1000;
+
+      // Actualizar lógica del juego.
+      this.simulationManager.update(deltaTime);
+
+      // Sincronizar vehículos con Babylon.js.
+      this.vehicleRenderer.update(
+        this.vehicleManager.getVehicles(),
+      );
+
+      // Renderizar escena.
       this.scene.render();
     });
   }
 
-  // --------------------------------------------------
-  // Modos
-  // --------------------------------------------------
+  // ==================================================
+  // MODOS
+  // ==================================================
 
   public selectMode(id: GameModeId): void {
+    if (this.pauseMenuOpen) return;
+
     this.modeManager.selectMode(id);
   }
 
@@ -286,11 +376,13 @@ export class Game {
     return this.modeManager.getActiveMode();
   }
 
-  // --------------------------------------------------
-  // Herramientas de construcción
-  // --------------------------------------------------
+  // ==================================================
+  // HERRAMIENTAS
+  // ==================================================
 
   public selectTool(tool: ToolId): void {
+    if (this.pauseMenuOpen) return;
+
     this.constructionMode.selectTool(tool);
   }
 
@@ -298,25 +390,211 @@ export class Game {
     return this.constructionMode.getActiveTool();
   }
 
-  // --------------------------------------------------
-  // Teclado
-  // --------------------------------------------------
+  // ==================================================
+  // SIMULACIÓN
+  // ==================================================
 
-  public onKeyDown(event: KeyboardEvent): boolean {
-    return this.modeManager.onKeyDown(event);
+  public pauseSimulation(): void {
+    this.simulationManager.pause();
   }
 
-  // --------------------------------------------------
+  public resumeSimulation(): void {
+    if (this.pauseMenuOpen) return;
+
+    this.simulationManager.resume();
+  }
+
+  public isSimulationPaused(): boolean {
+    return this.simulationManager.isPaused();
+  }
+
+  // ==================================================
+  // VEHÍCULOS
+  // ==================================================
+
+  
+  public spawnTestVehicle(): boolean {
+    if (this.pauseMenuOpen) return false;
+
+    const roads = this.gridManager.getTilesByType("road");
+
+    if (roads.length < 2) {
+      return false;
+    }
+
+    let bestPath: { x: number; y: number }[] | null = null;
+
+    // Buscar la ruta más larga entre carreteras conectadas.
+    for (const start of roads) {
+      for (const end of roads) {
+        if (
+          start.x === end.x &&
+          start.y === end.y
+        ) {
+          continue;
+        }
+
+        const path = findRoadPath(
+          this.gridManager,
+          { x: start.x, y: start.y },
+          { x: end.x, y: end.y },
+        );
+
+        if (
+          path &&
+          (!bestPath || path.length > bestPath.length)
+        ) {
+          bestPath = path;
+        }
+      }
+    }
+
+    if (!bestPath || bestPath.length < 2) {
+      return false;
+    }
+
+    const start = bestPath[0];
+    const destination = bestPath[bestPath.length - 1];
+
+    return (
+      this.vehicleManager.createVehicle(
+        start,
+        destination,
+      ) !== null
+    );
+  }
+
+
+  // ==================================================
+  // MENÚ DE PAUSA
+  // ==================================================
+
+  
+// ==================================================
+// MENÚ DE PAUSA
+// ==================================================
+
+  public isPauseMenuOpen(): boolean {
+    return this.pauseMenuOpen;
+  }
+
+  public getPauseMenuOptions(): PauseMenuOption[] {
+    return this.pauseMenuManager.getOptions();
+  }
+
+  public getPauseMenuContext(): PauseMenuContext {
+    return this.pauseMenuManager.getContext();
+  }
+
+  public setPauseMenuContext(
+    context: PauseMenuContext,
+  ): void {
+    if (this.pauseMenuManager.getContext() === context) {
+      return;
+    }
+
+    this.pauseMenuManager.setContext(context);
+    this.notifyPauseMenuChange();
+  }
+
+  public getPauseMenuState(): PauseMenuState {
+    return {
+      open: this.pauseMenuOpen,
+      options: this.getPauseMenuOptions(),
+    };
+  }
+
+  public onPauseMenuChange(
+    listener: (state: PauseMenuState) => void,
+  ): () => void {
+    this.pauseMenuListeners.add(listener);
+
+    // Sincronizar el estado inicial.
+    listener(this.getPauseMenuState());
+
+    return () => {
+      this.pauseMenuListeners.delete(listener);
+    };
+  }
+
+  public openPauseMenu(): void {
+    if (this.pauseMenuOpen) return;
+
+    this.wasPausedBeforeMenu =
+      this.simulationManager.isPaused();
+
+    this.pauseMenuOpen = true;
+
+    this.simulationManager.pause();
+
+    this.modeManager.onTileLeave();
+    this.camera.detachControl();
+
+    this.notifyPauseMenuChange();
+  }
+
+  public closePauseMenu(): void {
+    if (!this.pauseMenuOpen) return;
+
+    this.pauseMenuOpen = false;
+
+    this.camera.attachControl(this.canvas, true);
+
+    // Restaurar el estado anterior al menú.
+    if (!this.wasPausedBeforeMenu) {
+      this.simulationManager.resume();
+    }
+
+    this.notifyPauseMenuChange();
+  }
+
+  public executePauseMenuAction(
+    actionId: PauseMenuActionId,
+  ): void {
+    if (!this.pauseMenuOpen) return;
+
+    // Solo se pueden ejecutar acciones disponibles.
+    const option = this.getPauseMenuOptions().find(
+      (item) => item.id === actionId,
+    );
+
+    if (!option || option.disabled) return;
+
+    switch (actionId) {
+      case "resume":
+        this.closePauseMenu();
+        break;
+
+      // Se implementarán cuando existan
+      // los sistemas correspondientes.
+      case "settings":
+      case "save":
+      case "restart":
+      case "exit":
+        break;
+    }
+  }
+
+  private notifyPauseMenuChange(): void {
+    const state = this.getPauseMenuState();
+
+    for (const listener of this.pauseMenuListeners) {
+      listener(state);
+    }
+  }
+
+
+  // ==================================================
   // UI
-  // --------------------------------------------------
+  // ==================================================
 
   public getUIConfig(): UIConfig {
     return this.uiManager.getConfig();
   }
 
-  // --------------------------------------------------
-  // Limpieza
-  // --------------------------------------------------
+  // ==================================================
+  // CLEANUP
+  // ==================================================
 
   public dispose(): void {
     this.engine.stopRenderLoop();
@@ -326,8 +604,22 @@ export class Game {
       this.resizeHandler,
     );
 
+    // Entrada y modos.
+    this.inputManager.dispose();
     this.modeManager.dispose();
 
+    // Simulación.
+    this.simulationManager.dispose();
+    this.vehicleManager.clear();
+
+    // Renderizadores.
+    this.vehicleRenderer.dispose();
+    this.tileHighlight.dispose();
+
+    // Eventos UI.
+    this.pauseMenuListeners.clear();
+
+    // Babylon.js.
     this.scene.dispose();
     this.engine.dispose();
   }

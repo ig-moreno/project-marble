@@ -36,6 +36,7 @@
     padding: 12px;
     background: #252b30;
     border-radius: 8px;
+    pointer-events: auto;
   }
 
   button {

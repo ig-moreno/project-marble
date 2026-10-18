@@ -1,12 +1,18 @@
 
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { Game } from "../../core/Game";
   import TilePicker from "./TilePicker.svelte";
 
   import type { ToolId } from "../../modes/construction/tools/types";
   import type { UIConfig } from "../../ui/types";
   import type { GameModeId } from "@/game/modes/GameMode";
+  import PauseMenu from "./PauseMenu.svelte";
+
+  import type { PauseMenuOption } from "../../ui/pause/types";
+
+
+
 
   let canvas: HTMLCanvasElement;
 
@@ -15,16 +21,14 @@
   let uiConfig = $state<UIConfig | null>(null);
   let activeMode = $state<GameModeId>("construction");
   let activeTool = $state<ToolId | null>(null);
+  let pauseMenuOpen = $state(false);
+  let pauseMenuOptions = $state<PauseMenuOption[]>([]);
 
   function selectTool(tool: ToolId): void {
     if (!game) return;
 
     game.selectTool(tool);
     activeTool = game.getActiveTool();
-  }
-
-  function handleKeyDown(event: KeyboardEvent): void {
-    game?.onKeyDown(event);
   }
 
   function selectMode(mode: GameModeId): void {
@@ -39,20 +43,23 @@
     uiConfig = game.getUIConfig();
     activeTool = game.getActiveTool();
 
-    
+    const unsubscribePause = game.onPauseMenuChange(
+      (state) => {
+        pauseMenuOpen = state.open;
+        pauseMenuOptions = state.options;
+      },
+    );
 
-    window.addEventListener("keydown", handleKeyDown);
 
 
     return () => {
       game?.dispose();
       game = null;
+      unsubscribePause();
     };
   });
 
-  onDestroy(() => {
-    window.removeEventListener("keydown", handleKeyDown);
-  })
+
 </script>
 
 <div class="game-container">
@@ -60,14 +67,17 @@
 
   <div class="game-ui">
     <div class="mode-selector">
-      <button onclick={() => selectMode("normal")}>
+      <button onclick={() => selectMode("normal")} style="pointer-events: auto;">
         Normal
       </button>
 
-      <button onclick={() => selectMode("construction")}>
+      <button onclick={() => selectMode("construction")}  style="pointer-events: auto;">
         Construcción
       </button>
     </div>
+    <button onclick={() => game?.spawnTestVehicle()}>
+      🚗 Crear vehículo
+    </button>
 
     {#if activeMode === "construction" && uiConfig?.components.tilePicker}
       <TilePicker
@@ -76,7 +86,18 @@
         onSelect={selectTool}
       />
     {/if}
+
+    
+
   </div>
+  {#if pauseMenuOpen}
+    <PauseMenu
+      options={pauseMenuOptions}
+      onSelect={(actionId) => {
+        game?.executePauseMenuAction(actionId);
+      }}
+    />
+  {/if}
 </div>
 
 <style>
@@ -95,14 +116,12 @@ canvas {
 
 .game-ui {
   position: absolute;
-  top: 16px;
-  left: 16px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 10;
 
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
+  pointer-events: none;
 }
 
 .mode-selector {
