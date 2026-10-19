@@ -8,6 +8,11 @@ import {
 } from "babylonjs";
 
 import { GridManager } from "../simulation/GridManager";
+import { TEST_SCENARIO_CONFIG } from "../../config/game/testScenario";
+import { VEHICLE_CONFIG, VEHICLE_DIMENSIONS } from "../../config/game/simulation";
+import { findLaneRoute, type LaneRoute } from "../simulation/road/LanePathFinder";
+import { populateTestScenario, testRoutes, circularTestRoutes, type RouteTestState } from "../scenarios/TestScenario";
+import { getConnectedRoadNeighbors } from "../simulation/vehicles/RoadPathFinder";
 import { buildLaneGraph, type LaneGraph } from "../simulation/road/LaneGraph";
 import type { TileType } from "../simulation/Tile";
 import { getRoadGeometry } from "../simulation/road/RoadUtils";
@@ -57,9 +62,17 @@ import type {
   PauseMenuState,
 } from "../ui/pause/types";
 
-const INITIAL_CAMERA_ALPHA = -Math.PI / 2;
-const INITIAL_CAMERA_BETA = 0.01;
-const INITIAL_CAMERA_RADIUS = 250;
+import { DEFAULT_SESSION_SETTINGS } from "../../config/sessionSettings";
+import { RENDERING_CONFIG } from "../../config/game/rendering";
+
+import {
+  CAMERA_CONFIG,
+  INITIAL_CAMERA_ALPHA,
+  INITIAL_CAMERA_BETA,
+  INITIAL_CAMERA_RADIUS
+} from "../../config/game/camera";
+
+
 
 export class Game {
   // ==================================================
@@ -78,6 +91,13 @@ export class Game {
 
   private readonly gridManager: GridManager;
   private laneGraph: LaneGraph;
+  private activeTestRoute: string | null = null;
+  private diagnosticVehicleId: string | null = null;
+  private diagnosticVehicleIds: string[] = [];
+  private diagnosticLeaderHeld = false;
+  private diagnosticLapCount = 0;
+  private diagnosticStatus = "";
+  private readonly routeOverlay: LaneOverlayRenderer;
 
   // ==================================================
   // RENDERIZADO
@@ -146,14 +166,14 @@ export class Game {
   // CONSTRUCTOR
   // ==================================================
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, private readonly options: { testScenario?: boolean } = {}) {
     this.canvas = canvas;
 
     // --------------------------------------------------
     // Mundo lógico
     // --------------------------------------------------
 
-    this.gridManager = new GridManager(20, 20);
+    this.gridManager = new GridManager(DEFAULT_SESSION_SETTINGS.worldTilesX, DEFAULT_SESSION_SETTINGS.worldTilesY);
     this.laneGraph = buildLaneGraph(this.gridManager);
     // Una partida nueva comienza con el mapa vacío.
 
@@ -161,9 +181,9 @@ export class Game {
     // Babylon.js
     // --------------------------------------------------
 
-    this.engine = new Engine(this.canvas, true, {
-      preserveDrawingBuffer: true,
-      stencil: true,
+    this.engine = new Engine(this.canvas, RENDERING_CONFIG.antialias, {
+      preserveDrawingBuffer: RENDERING_CONFIG.preserveDrawingBuffer,
+      stencil: RENDERING_CONFIG.stencil,
     });
 
     this.scene = new Scene(this.engine);
@@ -200,6 +220,7 @@ export class Game {
       this.scene, this.gridManager.width, this.gridManager.height, 0.16,
     );
     this.laneOverlay = new LaneOverlayRenderer(this.scene, this.gridManager.width, this.gridManager.height);
+    this.routeOverlay = new LaneOverlayRenderer(this.scene, this.gridManager.width, this.gridManager.height);
 
     // Renderizar el estado inicial del mundo.
     this.tileRenderer.renderAll();
@@ -234,6 +255,17 @@ export class Game {
     // si han finalizado sus viajes.
     this.simulationManager.register((deltaTime) => {
       this.vehicleManager.update(deltaTime);
+      const laps = this.vehicleManager.getVehicles().reduce((sum, vehicle) => sum + (vehicle.kind === "lane" ? vehicle.completedLaps : 0), 0);
+      if (laps !== this.diagnosticLapCount) {
+        this.diagnosticLapCount = laps;
+        this.notifyNavigationChange();
+      }
+      if (this.diagnosticVehicleId && !this.vehicleManager.getVehicles().some((vehicle) => vehicle.id === this.diagnosticVehicleId || this.diagnosticVehicleIds.includes(vehicle.id))) {
+        this.diagnosticVehicleId = null;
+        this.diagnosticVehicleIds = [];
+        this.diagnosticStatus = "Recorrido completado";
+        this.notifyNavigationChange();
+      }
     });
 
 
@@ -374,15 +406,16 @@ export class Game {
 
     // Permite inclinar la cámara desde una vista cenital
     // hasta aproximadamente 75° respecto a la vertical.
-    camera.lowerBetaLimit = 0.01;
-    camera.upperBetaLimit = Math.PI / 2.4;
+    camera.lowerBetaLimit = CAMERA_CONFIG.lowerBetaLimit;
+    camera.upperBetaLimit = CAMERA_CONFIG.upperBetaLimit;
 
     // Límites del zoom.
-    camera.lowerRadiusLimit = 20;   // Máximo acercamiento.
-    camera.upperRadiusLimit = 600;  // Máximo alejamiento.
+    camera.lowerRadiusLimit = CAMERA_CONFIG.lowerRadiusLimit;   // Máximo acercamiento.
+    camera.upperRadiusLimit = CAMERA_CONFIG.upperRadiusLimit;  // Máximo alejamiento.
 
     // Sensibilidad del zoom con la rueda del ratón.
-    camera.wheelPrecision = 20;
+    camera.wheelPrecision = CAMERA_CONFIG.wheelPrecision;
+    camera.zoomToMouseLocation = CAMERA_CONFIG.zoomToMouseLocation;
 
     camera.attachControl(this.canvas, true);
 
@@ -392,7 +425,7 @@ export class Game {
       this.scene,
     );
 
-    light.intensity = 0.7;
+    light.intensity = RENDERING_CONFIG.hemisphericLightIntensity;
 
     return camera;
   }
@@ -425,6 +458,7 @@ export class Game {
         this.tileRenderer.updateTile(tile);
       }
     }
+    this.refreshTestRoute();
   }
 
   // ==================================================
@@ -483,6 +517,20 @@ export class Game {
   // ==================================================
   // SIMULACIÓN
   // ==================================================
+
+  public getSimulationSpeedOptions() {
+    return [
+      { speed: 1, icon: ">", label: "Velocidad normal" },
+      { speed: 2, icon: ">>", label: "Velocidad ?2" },
+      { speed: 4, icon: ">>>", label: "Velocidad ?4" },
+    ] as const;
+  }
+
+  public getSimulationSpeed(): 1 | 2 | 4 { return this.simulationManager.getSpeedMultiplier(); }
+
+  public setSimulationSpeed(speed: 1 | 2 | 4): void {
+    this.simulationManager.setSpeedMultiplier(speed);
+  }
 
   public pauseSimulation(): void {
     this.simulationManager.pause();
@@ -715,24 +763,30 @@ export class Game {
       ],
     }];
     if (tile.type === "road") {
+      const roadShape = getRoadGeometry(this.gridManager, x, y).shape;
       const connections = (Object.keys(directions) as RoadDirection[])
         .filter((direction) => tile.roadConnections[direction])
         .map((direction) => directions[direction]);
       sections.push({
         title: "Trazado",
         fields: [
-          { label: "Tipo", value: shapes[getRoadGeometry(this.gridManager, x, y).shape] },
+          { label: "Tipo", value: shapes[roadShape] },
           { label: `Conexiones (${connections.length})`, value: connections.join(", ") || "Sin conexiones" },
         ],
       });
-      const lanes = [...this.laneGraph.lanes.values()].filter((lane) => lane.tileX === x && lane.tileY === y);
-      this.laneOverlay.show(lanes);
+      const allLanes = [...this.laneGraph.lanes.values()];
+      const lanes = allLanes.filter((lane) => lane.tileX === x && lane.tileY === y);
+      const neighborTiles = new Set(getConnectedRoadNeighbors(this.gridManager, { x, y })
+        .map((neighbor) => `${neighbor.x},${neighbor.y}`));
+      const neighborLanes = allLanes.filter((lane) => neighborTiles.has(`${lane.tileX},${lane.tileY}`));
+      this.laneOverlay.show(lanes, neighborLanes);
       sections.push({
-        title: "Carriles dirigidos",
+        title: roadShape === "t-junction" || roadShape === "cross" ? "Movimientos de la intersección" : "Carriles dirigidos",
         fields: lanes.length ? lanes.flatMap((lane) => [
-          { label: "Entrada → salida", value: `${directions[lane.entry]} → ${directions[lane.exit]}` },
+          { label: "Entrada → salida", value: `${lane.entry === null ? "Extremo cerrado" : directions[lane.entry]} → ${lane.exit === null ? "Extremo cerrado" : directions[lane.exit]}` },
+          { label: "Movimiento", value: { straight: "Recto", left: "Giro a la izquierda", right: "Giro a la derecha", terminal: "Acceso al extremo" }[lane.movement] },
           { label: "Longitud", value: `${lane.trajectory.length.toFixed(2)} m` },
-          { label: "Continuidad", value: lane.nextLaneId ? `Conecta con ${lane.nextLaneId}` : "Sin continuación de carril" },
+          { label: "Continuidad", value: lane.exit === null ? "Fin del recorrido, sin retorno automático" : lane.nextLaneIds.length ? `Conecta con ${lane.nextLaneIds.join(", ")}` : "Sin continuación de carril" },
         ]) : [{ label: "Estado", value: "Pendiente de modelar movimientos para este tipo de carretera" }],
       });
     }
@@ -773,7 +827,7 @@ export class Game {
       case "settings":
         return { screen: "settings", settings: this.getSettingsState() };
       case "gameplay":
-        return { screen: "gameplay" };
+        return { screen: "gameplay", routeTest: this.getRouteTestState() };
     }
   }
 
@@ -819,12 +873,21 @@ export class Game {
         this.notifyNavigationChange();
         break;
       case "new-game":
+        if (this.options.testScenario) {
+          populateTestScenario(this.gridManager);
+          this.laneGraph = buildLaneGraph(this.gridManager);
+          this.tileRenderer.renderAll();
+        }
         this.simulationManager.resetClock();
         this.screen = "gameplay";
         this.modeManager.selectMode("construction");
         this.camera.alpha = INITIAL_CAMERA_ALPHA;
         this.camera.beta = INITIAL_CAMERA_BETA;
         this.camera.radius = INITIAL_CAMERA_RADIUS;
+        if (this.options.testScenario) {
+          this.modeManager.selectMode("normal");
+          this.camera.radius = TEST_SCENARIO_CONFIG.cameraRadius;
+        }
         this.camera.setTarget(Vector3.Zero());
         this.camera.attachControl(this.canvas, true);
         this.engine.resize();
@@ -835,6 +898,9 @@ export class Game {
   }
 
   private returnToMainMenu(): void {
+    this.stopDiagnosticVehicle();
+    this.activeTestRoute = null;
+    this.routeOverlay.clear();
     this.clearInspection();
     this.simulationManager.pause();
     this.modeManager.selectMode("normal");
@@ -856,6 +922,168 @@ export class Game {
     if (this.screen !== "settings" || !settingsTabs.some((item) => item.id === tab)) return;
     this.settingsTab = tab;
     this.notifyNavigationChange();
+  }
+
+  public selectTestRoute(id: string): void {
+    if (!this.options.testScenario || this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation) return;
+    if (id === "circular-traffic") {
+      if (this.diagnosticVehicleId) return;
+      const circles = circularTestRoutes(this.laneGraph);
+      if (circles.some((circle) => !circle.route)) {
+        this.diagnosticStatus = "Algún circuito está cortado: vuelve a iniciar el escenario";
+        this.notifyNavigationChange();
+        return;
+      }
+      for (let i = 0; i < TEST_SCENARIO_CONFIG.circularVehicleCount; i++) {
+        const circle = circles[i % circles.length];
+        const vehicle = this.spawnCircularVehicle(circle.route!, circle.color, i);
+        if (!vehicle) { this.stopDiagnosticVehicle("No hay espacio para iniciar los circuitos"); this.notifyNavigationChange(); return; }
+        this.diagnosticVehicleIds.push(vehicle.id);
+      }
+      this.diagnosticVehicleId = this.diagnosticVehicleIds[0];
+      this.activeTestRoute = "circular-traffic";
+      this.diagnosticStatus = "Circuitos continuos: dos movimientos rectos y dos giros en (0, 0)";
+      this.clearInspection();
+      this.routeOverlay.showColoredRoutes(circles.map((circle) => ({
+        color: circle.color, lanes: circle.route!.laneIds.map((laneId) => this.laneGraph.lanes.get(laneId)!),
+      })));
+      this.notifyNavigationChange();
+      return;
+    }
+    if (id === "convoy") {
+      if (this.activeTestRoute !== "following" || this.diagnosticVehicleId) return;
+      const preset = testRoutes.find((item) => item.id === "following")!;
+      const route = findLaneRoute(this.laneGraph, preset.start, preset.end);
+      if (!route) return;
+      if (route.laneIds.some((laneId) => {
+        const lane = this.laneGraph.lanes.get(laneId)!;
+        const shape = getRoadGeometry(this.gridManager, lane.tileX, lane.tileY).shape;
+        return shape === "t-junction" || shape === "cross";
+      })) {
+        this.diagnosticStatus = "La prueba de seguimiento necesita una ruta sin intersecciones";
+        this.notifyNavigationChange();
+        return;
+      }
+      for (const [i, distance] of TEST_SCENARIO_CONFIG.convoyStartDistancesMeters.entries()) {
+        const vehicle = this.vehicleManager.createLaneVehicle(this.laneGraph, route, VEHICLE_CONFIG.cruiseSpeedMetersPerSecond,
+          { ...VEHICLE_DIMENSIONS, wheelbase: i === 0 ? TEST_SCENARIO_CONFIG.leaderWheelbaseMeters : VEHICLE_DIMENSIONS.wheelbase }, distance);
+        if (!vehicle) { this.stopDiagnosticVehicle("No hay espacio para crear la cola"); this.notifyNavigationChange(); return; }
+        vehicle.speed = 0;
+        if (i === 0) vehicle.cruiseSpeed = 0;
+        this.diagnosticVehicleIds.push(vehicle.id);
+      }
+      this.diagnosticVehicleId = this.diagnosticVehicleIds[0];
+      this.diagnosticLeaderHeld = true;
+      this.diagnosticStatus = `${this.diagnosticVehicleIds.length} vehículos · primero detenido · separación mínima de ${VEHICLE_CONFIG.minimumGapMeters} m`;
+      this.notifyNavigationChange();
+      return;
+    }
+    if (id === "toggle-leader") {
+      const leader = this.vehicleManager.getVehicles().find((vehicle) => vehicle.id === this.diagnosticVehicleIds[0]);
+      if (!leader || leader.kind !== "lane") return;
+      this.diagnosticLeaderHeld = !this.diagnosticLeaderHeld;
+      leader.cruiseSpeed = this.diagnosticLeaderHeld ? 0 : VEHICLE_CONFIG.cruiseSpeedMetersPerSecond;
+      this.diagnosticStatus = this.diagnosticLeaderHeld ? "Frenando al primero; la cola espera detrás" : "Primero liberado; la cola reanuda la marcha";
+      this.notifyNavigationChange();
+      return;
+    }
+    if (id === "drive") {
+      const route = this.selectedTestRoute();
+      if (!route || this.diagnosticVehicleId) return;
+      const circle = circularTestRoutes(this.laneGraph).find((item) => item.id === this.activeTestRoute);
+      const vehicle = route.loop ? this.spawnCircularVehicle(route, circle?.color ?? "#39d9ff", 0)
+        : this.vehicleManager.createLaneVehicle(this.laneGraph, route);
+      this.diagnosticVehicleId = vehicle?.id ?? null;
+      this.diagnosticStatus = vehicle ? `Vehículo en marcha · ${VEHICLE_CONFIG.cruiseSpeedMetersPerSecond} m/s` : "No se pudo iniciar el recorrido";
+      this.notifyNavigationChange();
+      return;
+    }
+    if (id === "stop") {
+      this.stopDiagnosticVehicle();
+      this.notifyNavigationChange();
+      return;
+    }
+    if (id !== "clear" && !testRoutes.some((route) => route.id === id) && !circularTestRoutes(this.laneGraph).some((route) => route.id === id)) return;
+    this.stopDiagnosticVehicle();
+    this.clearInspection();
+    this.activeTestRoute = id === "clear" ? null : id;
+    this.refreshTestRoute();
+  }
+
+  private getRouteTestState(): RouteTestState | null {
+    if (!this.options.testScenario) return null;
+    const preset = testRoutes.find((item) => item.id === this.activeTestRoute);
+    const route = this.selectedTestRoute();
+    return {
+      title: "Prueba de rutas por carriles",
+      description: "Carreteras de prueba. Elige un recorrido; puedes borrar tramos para comprobar alternativas.",
+      options: [
+        ...testRoutes.map(({ id, label }) => ({ id, label })),
+        ...circularTestRoutes(this.laneGraph).map(({ id, label }) => ({ id, label })),
+        { id: "circular-traffic", label: `Iniciar ${TEST_SCENARIO_CONFIG.circularVehicleCount} coches en circuitos`, disabled: this.diagnosticVehicleId !== null },
+        { id: "clear", label: "Ocultar ruta" },
+        { id: "drive", label: "Recorrer ruta", disabled: !route || this.diagnosticVehicleId !== null },
+        { id: "convoy", label: `Probar cola (${TEST_SCENARIO_CONFIG.convoyStartDistancesMeters.length} vehículos)`, disabled: this.activeTestRoute !== "following" || !route || this.diagnosticVehicleId !== null },
+        { id: "toggle-leader", label: this.diagnosticLeaderHeld ? "Soltar primero" : "Detener primero", disabled: !this.diagnosticVehicleIds.length || this.activeTestRoute !== "following" },
+        { id: "stop", label: "Retirar vehículo", disabled: this.diagnosticVehicleId === null },
+      ],
+      activeId: this.activeTestRoute,
+      status: (route ? `${route.length.toFixed(2)} m · ${route.laneIds.length} trayectorias${route.loop ? " · circuito cerrado" : ""}`
+        : this.activeTestRoute === "circular-traffic" ? `${this.diagnosticVehicleIds.length} coches en circuitos` : preset ? "Sin ruta disponible" : "Elige una ruta")
+        + (this.diagnosticStatus ? ` · ${this.diagnosticStatus}` : "")
+        + (this.diagnosticLapCount ? ` · ${this.diagnosticLapCount} vueltas completadas` : ""),
+    };
+  }
+
+  private refreshTestRoute(): void {
+    if (!this.options.testScenario) return;
+    this.stopDiagnosticVehicle(this.diagnosticVehicleId ? "Recorrido cancelado al editar carreteras" : this.diagnosticStatus);
+    const route = this.selectedTestRoute();
+    this.routeOverlay.showRoute(route ? route.laneIds.map((id) => this.laneGraph.lanes.get(id)!) : []);
+    this.notifyNavigationChange();
+  }
+
+  private stopDiagnosticVehicle(status = ""): void {
+    if (this.diagnosticVehicleId) this.vehicleManager.removeVehicleForTest(this.diagnosticVehicleId);
+    for (const id of this.diagnosticVehicleIds) this.vehicleManager.removeVehicleForTest(id);
+    this.diagnosticVehicleIds = [];
+    this.diagnosticLapCount = 0;
+    this.diagnosticLeaderHeld = false;
+    this.diagnosticVehicleId = null;
+    this.diagnosticStatus = status;
+  }
+
+  private selectedTestRoute(): LaneRoute | null {
+    const preset = testRoutes.find((item) => item.id === this.activeTestRoute);
+    if (preset) return findLaneRoute(this.laneGraph, preset.start, preset.end);
+    return circularTestRoutes(this.laneGraph).find((item) => item.id === this.activeTestRoute)?.route ?? null;
+  }
+
+  private spawnCircularVehicle(route: LaneRoute, color: string, index: number) {
+    const override = TEST_SCENARIO_CONFIG.circularStartOverrides.find((item) => item.number === index + 1);
+    if (override) {
+      let start = 0;
+      for (const id of route.laneIds) {
+        const lane = this.laneGraph.lanes.get(id)!;
+        if (lane.tileX === override.tileX && lane.tileY === override.tileY) {
+          const vehicle = this.vehicleManager.createLaneVehicle(this.laneGraph, route, VEHICLE_CONFIG.cruiseSpeedMetersPerSecond,
+            VEHICLE_DIMENSIONS, start + lane.trajectory.length * override.progress, true);
+          if (vehicle) vehicle.color = color;
+          return vehicle;
+        }
+        start += lane.trajectory.length;
+      }
+      return null;
+    }
+    const phases = TEST_SCENARIO_CONFIG.circularSpawnFractions;
+    const wave = Math.floor(index / phases.length) / Math.ceil(TEST_SCENARIO_CONFIG.circularVehicleCount / phases.length);
+    const initial = route.length * ((phases[index % phases.length] + wave) % 1);
+    for (let offset = 0; offset < route.length; offset += TEST_SCENARIO_CONFIG.circularSpawnSearchStepMeters) {
+      const vehicle = this.vehicleManager.createLaneVehicle(this.laneGraph, route, VEHICLE_CONFIG.cruiseSpeedMetersPerSecond,
+        VEHICLE_DIMENSIONS, (initial + offset) % route.length);
+      if (vehicle) { vehicle.color = color; return vehicle; }
+    }
+    return null;
   }
 
   public closeSettings(): void {
@@ -908,6 +1136,7 @@ export class Game {
     this.tileHighlight.dispose();
     this.selectionHighlight.dispose();
     this.laneOverlay.dispose();
+    this.routeOverlay.dispose();
     this.tileRenderer.dispose();
 
     // Eventos UI.

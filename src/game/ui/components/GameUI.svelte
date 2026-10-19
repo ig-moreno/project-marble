@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SIMULATION_CONFIG } from "../../../config/game/simulation";
   import type { Game } from "../../core/Game";
   import GameplayUI from "./GameplayUI.svelte";
   import MainMenuScreen from "./MainMenuScreen.svelte";
+  import RouteTestPanel from "./RouteTestPanel.svelte";
 
   import type { ToolId } from "../../modes/construction/tools/types";
   import type { UIConfig } from "../../ui/types";
@@ -27,7 +29,7 @@
   let confirmation = $state<ConfirmationDialogState | null>(null);
   let navigation = $state<NavigationState | null>(null);
   let inspection = $state<InspectionState | null>(null);
-  let clockMinutes = $state(6 * 60);
+  let clockMinutes = $state<number>(SIMULATION_CONFIG.initialClockMinutes);
 
   function selectTool(tool: ToolId): void {
     game.selectTool(tool);
@@ -84,7 +86,10 @@
     onReset={() => game.requestSettingsReset()}
   />
 {:else if navigation?.screen === "gameplay"}
-  <GameplayUI {uiConfig} {activeMode} {activeTool} {inspection} {clockMinutes} onCloseInspection={() => game.clearInspection()} onSelectMode={selectMode} onSelectTool={selectTool} />
+  {#if navigation.routeTest}
+    <RouteTestPanel state={navigation.routeTest} onSelect={(id) => game.selectTestRoute(id)} />
+  {/if}
+  <GameplayUI {game} {uiConfig} {activeMode} {activeTool} {inspection} {clockMinutes} onCloseInspection={() => game.clearInspection()} onSelectMode={selectMode} onSelectTool={selectTool} />
 {/if}
 
 {#if pauseMenuOpen}

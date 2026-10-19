@@ -7,10 +7,8 @@ import {
 } from "babylonjs";
 
 import type { RoadShape } from "../simulation/road/types";
-
-export const TILE_SIZE = 10;
-export const ROAD_WIDTH = 6;
-export const SIDEWALK_WIDTH = 2;
+import { ROAD_END_LENGTH, TILE_SIZE, ROAD_WIDTH, SIDEWALK_WIDTH } from "../../config/game/world";
+export { TILE_SIZE, ROAD_WIDTH, SIDEWALK_WIDTH } from "../../config/game/world";
 
 const HALF = TILE_SIZE / 2;
 const ROAD_HALF = ROAD_WIDTH / 2;
@@ -123,6 +121,27 @@ function createCorner(
   );
 }
 
+/** Fill the inside corner between adjacent arms with a tangent quarter-circle.
+ * Radius matches the inner edge of the existing two-connection curve. */
+function createJunctionFillet(scene: Scene, sx: number, sz: number): Mesh {
+  const radius = HALF - ROAD_HALF;
+  const segments = 12;
+  const points: Point[] = [{ x: sx * ROAD_HALF, z: sz * ROAD_HALF }];
+  const indices: number[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const angle = Math.PI + i / segments * Math.PI / 2;
+    points.push({
+      x: sx * (HALF + Math.cos(angle) * radius),
+      z: sz * (HALF + Math.sin(angle) * radius),
+    });
+    if (i > 0) {
+      if (sx * sz > 0) indices.push(0, i + 1, i);
+      else indices.push(0, i, i + 1);
+    }
+  }
+  return createSurface(scene, "road-junction-fillet", points, indices);
+}
+
 export function createRoadGeometry(
   scene: Scene,
   shape: RoadShape,
@@ -130,7 +149,7 @@ export function createRoadGeometry(
   switch (shape) {
     case "isolated":
       return [
-        createRectangle(scene, "road-isolated", 6, 6),
+        createRectangle(scene, "road-isolated", ROAD_WIDTH, ROAD_WIDTH),
       ];
 
     case "end":
@@ -139,9 +158,9 @@ export function createRoadGeometry(
           scene,
           "road-end",
           ROAD_WIDTH,
-          8,
+          ROAD_END_LENGTH,
           0,
-          -1,
+          (ROAD_END_LENGTH - TILE_SIZE) / 2,
         ),
       ];
 
@@ -172,8 +191,10 @@ export function createRoadGeometry(
           ROAD_WIDTH,
           SIDEWALK_WIDTH,
           0,
-          -4,
+          -(TILE_SIZE + ROAD_WIDTH) / 4,
         ),
+        createJunctionFillet(scene, -1, -1),
+        createJunctionFillet(scene, 1, -1),
       ];
 
     case "cross":
@@ -190,6 +211,10 @@ export function createRoadGeometry(
           TILE_SIZE,
           ROAD_WIDTH,
         ),
+        createJunctionFillet(scene, -1, -1),
+        createJunctionFillet(scene, 1, -1),
+        createJunctionFillet(scene, -1, 1),
+        createJunctionFillet(scene, 1, 1),
       ];
   }
 }

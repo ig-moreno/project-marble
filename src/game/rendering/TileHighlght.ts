@@ -7,7 +7,7 @@ import {
   type Mesh,
 } from "babylonjs";
 
-import { TILE_SIZE } from "../../config/world";
+import { TILE_SIZE } from "../../config/game/world";
 import { gridToWorld } from "../utils/coordinates";
 
 export class TileHighlight {

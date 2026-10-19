@@ -1,17 +1,26 @@
+import { SIMULATION_CONFIG } from "../../config/game/simulation";
+
 
 export class SimulationManager {
-  private readonly fixedDelta = 1 / 60;
-  private readonly maxFrameDelta = 0.1;
+  private readonly fixedDelta = SIMULATION_CONFIG.fixedDeltaSeconds;
+  private readonly maxFrameDelta = SIMULATION_CONFIG.maxFrameDeltaSeconds;
 
   private accumulator = 0;
+  private speedMultiplier: 1 | 2 | 4 = 1;
+
+  getSpeedMultiplier(): 1 | 2 | 4 { return this.speedMultiplier; }
+
+  setSpeedMultiplier(speed: 1 | 2 | 4): void {
+    if (speed === 1 || speed === 2 || speed === 4) this.speedMultiplier = speed;
+  }
   private paused = false;
   private elapsedTicks = 0;
   private readonly clockListeners = new Set<(minutes: number) => void>();
   // Un día de juego dura 30 minutos reales; el HUD avanza cada 10 minutos.
-  private readonly ticksPerClockStep = (30 * 60 / (24 * 6)) / this.fixedDelta;
+  private readonly ticksPerClockStep = (SIMULATION_CONFIG.dayDurationSeconds / (24 * 60 / SIMULATION_CONFIG.clockStepMinutes)) / this.fixedDelta;
 
   getClockMinutes(): number {
-    return (6 * 60 + Math.floor(this.elapsedTicks / this.ticksPerClockStep) * 10) % (24 * 60);
+    return (SIMULATION_CONFIG.initialClockMinutes + Math.floor(this.elapsedTicks / this.ticksPerClockStep) * SIMULATION_CONFIG.clockStepMinutes) % (24 * 60);
   }
 
   onClockChange(listener: (minutes: number) => void): () => void {
@@ -21,6 +30,7 @@ export class SimulationManager {
   }
 
   resetClock(): void {
+    this.speedMultiplier = 1;
     this.elapsedTicks = 0;
     this.accumulator = 0;
     this.notifyClockChange();
@@ -51,7 +61,7 @@ export class SimulationManager {
     this.accumulator += Math.min(
       deltaTime,
       this.maxFrameDelta,
-    );
+    ) * this.speedMultiplier;
 
     while (this.accumulator >= this.fixedDelta) {
       const previousMinutes = this.getClockMinutes();

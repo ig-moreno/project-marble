@@ -7,7 +7,8 @@
   let game = $state<Game | null>(null);
 
   onMount(() => {
-    const instance = new Game(canvas);
+    const testScenario = import.meta.env.DEV && new URLSearchParams(window.location.search).get("scenario") === "test";
+    const instance = new Game(canvas, { testScenario });
     game = instance;
     return () => instance.dispose();
   });

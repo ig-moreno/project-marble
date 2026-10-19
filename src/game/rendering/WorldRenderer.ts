@@ -1,6 +1,6 @@
 import { Color3, MeshBuilder, StandardMaterial, Vector3, type Scene } from "babylonjs";
 import type { GridManager } from "../simulation/GridManager";
-import { TILE_SIZE } from "../../config/world";
+import { TILE_SIZE } from "../../config/game/world";
 
 export class WorldRenderer {
   private scene: Scene

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SimulationSpeedControls from "./SimulationSpeedControls.svelte";
+  import type { Game } from "../../core/Game";
   import TilePicker from "./TilePicker.svelte";
   import InspectionPanel from "./InspectionPanel.svelte";
   import type { InspectionState } from "../inspection/types";
@@ -6,7 +8,8 @@
   import type { GameModeId } from "../../modes/GameMode";
   import type { ToolId } from "../../modes/construction/tools/types";
 
-  let { uiConfig, activeMode, activeTool, onSelectMode, onSelectTool, inspection, onCloseInspection, clockMinutes }: {
+  let { game, uiConfig, activeMode, activeTool, onSelectMode, onSelectTool, inspection, onCloseInspection, clockMinutes }: {
+    game: Game;
     clockMinutes: number;
     inspection: InspectionState | null;
     onCloseInspection: () => void;
@@ -26,6 +29,7 @@
     <div class="simulation-clock" aria-label="Hora de la simulación">
       <span>Hora</span>
       <time>{clockTime}</time>
+      <SimulationSpeedControls {game} />
     </div>
     <div class="mode-selector">
       {#each uiConfig?.availableModes ?? [] as mode (mode.id)}

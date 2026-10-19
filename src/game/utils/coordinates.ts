@@ -1,5 +1,5 @@
 import { Vector3 } from "babylonjs";
-import { TILE_SIZE } from "../../config/world";
+import { TILE_SIZE } from "../../config/game/world";
 
 export function gridToWorld(
   x: number,
