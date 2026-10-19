@@ -1,7 +1,7 @@
 
 import type { GridManager } from "../GridManager";
 import type { Person } from "../people/Person";
-import type { ScenarioBuilding } from "../../scenarios/TestScenario";
+import type { Building } from "../buildings/Building";
 import type { VehicleManager } from "../vehicles/VehicleManager";
 
 import { BuildingPathResolver } from "../buildings/BuildingPathResolver";
@@ -13,7 +13,7 @@ export class MobilityManager {
 
   private readonly buildings = new Map<
     string,
-    ScenarioBuilding
+    Building
   >();
 
   private readonly trips = new Map<string, Trip>();
@@ -37,7 +37,7 @@ export class MobilityManager {
   }
 
   public registerBuilding(
-    building: ScenarioBuilding,
+    building: Building,
   ): void {
     this.buildings.set(building.id, building);
   }
