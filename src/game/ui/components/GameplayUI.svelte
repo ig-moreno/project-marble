@@ -6,7 +6,8 @@
   import type { GameModeId } from "../../modes/GameMode";
   import type { ToolId } from "../../modes/construction/tools/types";
 
-  let { uiConfig, activeMode, activeTool, onSelectMode, onSelectTool, inspection, onCloseInspection }: {
+  let { uiConfig, activeMode, activeTool, onSelectMode, onSelectTool, inspection, onCloseInspection, clockMinutes }: {
+    clockMinutes: number;
     inspection: InspectionState | null;
     onCloseInspection: () => void;
     uiConfig: UIConfig | null;
@@ -15,9 +16,17 @@
     onSelectMode: (mode: GameModeId) => void;
     onSelectTool: (tool: ToolId) => void;
   } = $props();
+
+  const clockTime = $derived(
+    `${Math.floor(clockMinutes / 60).toString().padStart(2, "0")}:${(clockMinutes % 60).toString().padStart(2, "0")}`,
+  );
 </script>
 
   <div class="game-ui">
+    <div class="simulation-clock" aria-label="Hora de la simulación">
+      <span>Hora</span>
+      <time>{clockTime}</time>
+    </div>
     <div class="mode-selector">
       {#each uiConfig?.availableModes ?? [] as mode (mode.id)}
         <button
@@ -48,6 +57,21 @@
   </div>
 
 <style>
+.simulation-clock {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid #55616b;
+  border-radius: 6px;
+  background: #252b30;
+  color: white;
+}
+.simulation-clock span { font-size: 12px; color: #c5cdd3; }
+.simulation-clock time { font-size: 20px; font-variant-numeric: tabular-nums; }
 .inspection-hint { margin: 12px; color: white; text-shadow: 0 1px 4px black; }
 .game-ui {
   position: absolute;

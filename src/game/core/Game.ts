@@ -8,6 +8,7 @@ import {
 } from "babylonjs";
 
 import { GridManager } from "../simulation/GridManager";
+import { buildLaneGraph, type LaneGraph } from "../simulation/road/LaneGraph";
 import type { TileType } from "../simulation/Tile";
 import { getRoadGeometry } from "../simulation/road/RoadUtils";
 import type { RoadShape, RoadDirection } from "../simulation/road/types";
@@ -21,6 +22,7 @@ import { WorldRenderer } from "../rendering/WorldRenderer";
 import { DebugRenderer } from "../rendering/DebugRenderer";
 import { TileHighlight } from "../rendering/TileHighlght";
 import { TileRenderer } from "../rendering/TileRenderer";
+import { LaneOverlayRenderer } from "../rendering/LaneOverlayRenderer";
 import { VehicleRenderer } from "../rendering/VehicleRenderer";
 
 import { UIManager } from "../ui/UIManager";
@@ -55,6 +57,10 @@ import type {
   PauseMenuState,
 } from "../ui/pause/types";
 
+const INITIAL_CAMERA_ALPHA = -Math.PI / 2;
+const INITIAL_CAMERA_BETA = 0.01;
+const INITIAL_CAMERA_RADIUS = 250;
+
 export class Game {
   // ==================================================
   // BABYLON
@@ -71,6 +77,7 @@ export class Game {
   // ==================================================
 
   private readonly gridManager: GridManager;
+  private laneGraph: LaneGraph;
 
   // ==================================================
   // RENDERIZADO
@@ -80,6 +87,7 @@ export class Game {
   private readonly debugRenderer: DebugRenderer;
   private readonly tileHighlight: TileHighlight;
   private readonly selectionHighlight: TileHighlight;
+  private readonly laneOverlay: LaneOverlayRenderer;
   private inspection: InspectionState | null = null;
   private readonly inspectionListeners = new Set<(state: InspectionState | null) => void>();
   private readonly tileRenderer: TileRenderer;
@@ -146,6 +154,7 @@ export class Game {
     // --------------------------------------------------
 
     this.gridManager = new GridManager(20, 20);
+    this.laneGraph = buildLaneGraph(this.gridManager);
     // Una partida nueva comienza con el mapa vacío.
 
     // --------------------------------------------------
@@ -190,6 +199,7 @@ export class Game {
     this.selectionHighlight = new TileHighlight(
       this.scene, this.gridManager.width, this.gridManager.height, 0.16,
     );
+    this.laneOverlay = new LaneOverlayRenderer(this.scene, this.gridManager.width, this.gridManager.height);
 
     // Renderizar el estado inicial del mundo.
     this.tileRenderer.renderAll();
@@ -355,17 +365,26 @@ export class Game {
   private initializeScene(): ArcRotateCamera {
     const camera = new ArcRotateCamera(
       "camera",
-      -Math.PI / 2,
-      Math.PI / 2.5,
-      50,
+      INITIAL_CAMERA_ALPHA,
+      INITIAL_CAMERA_BETA,
+      INITIAL_CAMERA_RADIUS,
       Vector3.Zero(),
       this.scene,
     );
 
-    camera.attachControl(this.canvas, true);
+    // Permite inclinar la cámara desde una vista cenital
+    // hasta aproximadamente 75° respecto a la vertical.
+    camera.lowerBetaLimit = 0.01;
+    camera.upperBetaLimit = Math.PI / 2.4;
 
-    camera.lowerRadiusLimit = 2;
-    camera.upperRadiusLimit = 200;
+    // Límites del zoom.
+    camera.lowerRadiusLimit = 20;   // Máximo acercamiento.
+    camera.upperRadiusLimit = 600;  // Máximo alejamiento.
+
+    // Sensibilidad del zoom con la rueda del ratón.
+    camera.wheelPrecision = 20;
+
+    camera.attachControl(this.canvas, true);
 
     const light = new HemisphericLight(
       "light",
@@ -393,6 +412,8 @@ export class Game {
       { x, y: y + 1 },
       { x: x - 1, y },
     ];
+
+    this.laneGraph = buildLaneGraph(this.gridManager);
 
     for (const position of positions) {
       const tile = this.gridManager.getTile(
@@ -475,6 +496,10 @@ export class Game {
 
   public isSimulationPaused(): boolean {
     return this.simulationManager.isPaused();
+  }
+
+  public onClockChange(listener: (minutes: number) => void): () => void {
+    return this.simulationManager.onClockChange(listener);
   }
 
   // ==================================================
@@ -660,6 +685,7 @@ export class Game {
   }
 
   private inspectTile(x: number, y: number): void {
+    this.laneOverlay.clear();
     const tile = this.gridManager.getTile(x, y);
     if (!tile) {
       this.clearInspection();
@@ -699,6 +725,16 @@ export class Game {
           { label: `Conexiones (${connections.length})`, value: connections.join(", ") || "Sin conexiones" },
         ],
       });
+      const lanes = [...this.laneGraph.lanes.values()].filter((lane) => lane.tileX === x && lane.tileY === y);
+      this.laneOverlay.show(lanes);
+      sections.push({
+        title: "Carriles dirigidos",
+        fields: lanes.length ? lanes.flatMap((lane) => [
+          { label: "Entrada → salida", value: `${directions[lane.entry]} → ${directions[lane.exit]}` },
+          { label: "Longitud", value: `${lane.trajectory.length.toFixed(2)} m` },
+          { label: "Continuidad", value: lane.nextLaneId ? `Conecta con ${lane.nextLaneId}` : "Sin continuación de carril" },
+        ]) : [{ label: "Estado", value: "Pendiente de modelar movimientos para este tipo de carretera" }],
+      });
     }
     this.inspection = {
       title: titles[tile.type],
@@ -713,6 +749,7 @@ export class Game {
     if (!this.inspection) return false;
     this.inspection = null;
     this.selectionHighlight.hide();
+    this.laneOverlay.clear();
     this.notifyInspectionChange();
     return true;
   }
@@ -782,11 +819,12 @@ export class Game {
         this.notifyNavigationChange();
         break;
       case "new-game":
+        this.simulationManager.resetClock();
         this.screen = "gameplay";
         this.modeManager.selectMode("construction");
-        this.camera.alpha = -Math.PI / 2;
-        this.camera.beta = Math.PI / 2.5;
-        this.camera.radius = 50;
+        this.camera.alpha = INITIAL_CAMERA_ALPHA;
+        this.camera.beta = INITIAL_CAMERA_BETA;
+        this.camera.radius = INITIAL_CAMERA_RADIUS;
         this.camera.setTarget(Vector3.Zero());
         this.camera.attachControl(this.canvas, true);
         this.engine.resize();
@@ -805,6 +843,7 @@ export class Game {
     this.vehicleRenderer.update([]);
     this.mobilityManager.clear();
     this.gridManager.clear();
+    this.laneGraph = buildLaneGraph(this.gridManager);
     this.tileRenderer.dispose();
     this.pauseMenuOpen = false;
     this.wasPausedBeforeMenu = false;
@@ -868,6 +907,7 @@ export class Game {
     this.vehicleRenderer.dispose();
     this.tileHighlight.dispose();
     this.selectionHighlight.dispose();
+    this.laneOverlay.dispose();
     this.tileRenderer.dispose();
 
     // Eventos UI.

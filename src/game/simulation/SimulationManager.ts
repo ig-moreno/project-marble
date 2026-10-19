@@ -5,6 +5,31 @@ export class SimulationManager {
 
   private accumulator = 0;
   private paused = false;
+  private elapsedTicks = 0;
+  private readonly clockListeners = new Set<(minutes: number) => void>();
+  // Un día de juego dura 30 minutos reales; el HUD avanza cada 10 minutos.
+  private readonly ticksPerClockStep = (30 * 60 / (24 * 6)) / this.fixedDelta;
+
+  getClockMinutes(): number {
+    return (6 * 60 + Math.floor(this.elapsedTicks / this.ticksPerClockStep) * 10) % (24 * 60);
+  }
+
+  onClockChange(listener: (minutes: number) => void): () => void {
+    this.clockListeners.add(listener);
+    listener(this.getClockMinutes());
+    return () => { this.clockListeners.delete(listener); };
+  }
+
+  resetClock(): void {
+    this.elapsedTicks = 0;
+    this.accumulator = 0;
+    this.notifyClockChange();
+  }
+
+  private notifyClockChange(): void {
+    const minutes = this.getClockMinutes();
+    for (const listener of this.clockListeners) listener(minutes);
+  }
 
   private readonly systems = new Set<
     (deltaTime: number) => void
@@ -29,6 +54,10 @@ export class SimulationManager {
     );
 
     while (this.accumulator >= this.fixedDelta) {
+      const previousMinutes = this.getClockMinutes();
+      this.elapsedTicks += 1;
+      if (this.getClockMinutes() !== previousMinutes) this.notifyClockChange();
+
       for (const system of this.systems) {
         system(this.fixedDelta);
       }
@@ -53,5 +82,6 @@ export class SimulationManager {
 
   dispose(): void {
     this.systems.clear();
+    this.clockListeners.clear();
   }
 }

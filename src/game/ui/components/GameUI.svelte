@@ -27,6 +27,7 @@
   let confirmation = $state<ConfirmationDialogState | null>(null);
   let navigation = $state<NavigationState | null>(null);
   let inspection = $state<InspectionState | null>(null);
+  let clockMinutes = $state(6 * 60);
 
   function selectTool(tool: ToolId): void {
     game.selectTool(tool);
@@ -40,6 +41,7 @@
   }
 
   onMount(() => {
+    const unsubscribeClock = game.onClockChange((minutes) => { clockMinutes = minutes; });
     const unsubscribeInspection = game.onInspectionChange((state) => { inspection = state; });
     uiConfig = game.getUIConfig();
     activeTool = game.getActiveTool();
@@ -62,6 +64,7 @@
     });
 
     return () => {
+      unsubscribeClock();
       unsubscribePause();
       unsubscribeInspection();
       unsubscribeConfirmation();
@@ -81,7 +84,7 @@
     onReset={() => game.requestSettingsReset()}
   />
 {:else if navigation?.screen === "gameplay"}
-  <GameplayUI {uiConfig} {activeMode} {activeTool} {inspection} onCloseInspection={() => game.clearInspection()} onSelectMode={selectMode} onSelectTool={selectTool} />
+  <GameplayUI {uiConfig} {activeMode} {activeTool} {inspection} {clockMinutes} onCloseInspection={() => game.clearInspection()} onSelectMode={selectMode} onSelectTool={selectTool} />
 {/if}
 
 {#if pauseMenuOpen}
