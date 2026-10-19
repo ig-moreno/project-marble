@@ -17,6 +17,7 @@ export class TileHighlight {
     scene: Scene,
     private gridWidth: number,
     private gridHeight: number,
+    elevation = 0.1,
   ) {
     // Crear una única malla para el highlight
     this.mesh = MeshBuilder.CreateGround(
@@ -44,7 +45,7 @@ export class TileHighlight {
     this.mesh.isPickable = false;
 
     // Ligeramente por encima del terreno
-    this.mesh.position.y = 0.1;
+    this.mesh.position.y = elevation;
 
     // Oculto inicialmente
     this.mesh.setEnabled(false);

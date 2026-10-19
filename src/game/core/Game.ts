@@ -8,6 +8,14 @@ import {
 } from "babylonjs";
 
 import { GridManager } from "../simulation/GridManager";
+import type { TileType } from "../simulation/Tile";
+import { getRoadGeometry } from "../simulation/road/RoadUtils";
+import type { RoadShape, RoadDirection } from "../simulation/road/types";
+import type { InspectionState } from "../ui/inspection/types";
+import type { MainMenuActionId, MainMenuState } from "../ui/menu/types";
+import type { NavigationState, GameScreen } from "../ui/navigation/types";
+import type { SettingsState, SettingsTabId } from "../ui/settings/types";
+import { settingsTabs } from "../ui/settings/content";
 
 import { WorldRenderer } from "../rendering/WorldRenderer";
 import { DebugRenderer } from "../rendering/DebugRenderer";
@@ -33,6 +41,11 @@ import type { ToolId } from "../modes/construction/tools/types";
 import { PauseMenuManager } from "../ui/pause/PauseMenuManager";
 
 import { MobilityManager } from "../simulation/mobility/MobilityManager";
+import type {
+  ConfirmationDialogRequest,
+  ConfirmationDialogState,
+  ConfirmationResponse,
+} from "../ui/confirmation/types";
 
 
 import type {
@@ -66,6 +79,9 @@ export class Game {
   private readonly worldRenderer: WorldRenderer;
   private readonly debugRenderer: DebugRenderer;
   private readonly tileHighlight: TileHighlight;
+  private readonly selectionHighlight: TileHighlight;
+  private inspection: InspectionState | null = null;
+  private readonly inspectionListeners = new Set<(state: InspectionState | null) => void>();
   private readonly tileRenderer: TileRenderer;
   private readonly vehicleRenderer: VehicleRenderer;
 
@@ -90,6 +106,9 @@ export class Game {
 
   private readonly inputManager: InputManager;
   private readonly uiManager: UIManager;
+  private screen: GameScreen = "main-menu";
+  private settingsTab: SettingsTabId = "general";
+  private readonly navigationListeners = new Set<(state: NavigationState) => void>();
 
   // ==================================================
   // PAUSA
@@ -99,6 +118,11 @@ export class Game {
 
   private pauseMenuOpen = false;
   private wasPausedBeforeMenu = false;
+  private confirmation: ConfirmationDialogRequest | null = null;
+  private wasPausedBeforeConfirmation = false;
+  private readonly confirmationListeners = new Set<
+    (state: ConfirmationDialogState | null) => void
+  >();
 
   private readonly pauseMenuListeners = new Set<
     (state: PauseMenuState) => void
@@ -163,6 +187,10 @@ export class Game {
       this.gridManager,
     );
 
+    this.selectionHighlight = new TileHighlight(
+      this.scene, this.gridManager.width, this.gridManager.height, 0.16,
+    );
+
     // Renderizar el estado inicial del mundo.
     this.tileRenderer.renderAll();
 
@@ -177,6 +205,7 @@ export class Game {
     // --------------------------------------------------
 
     this.simulationManager = new SimulationManager();
+    this.simulationManager.pause();
     
 
     
@@ -220,7 +249,10 @@ export class Game {
       },
     );
 
-    this.modeManager.register(new NormalMode());
+    this.modeManager.register(new NormalMode(
+      (x, y) => this.inspectTile(x, y),
+      () => this.clearInspection(),
+    ));
     this.modeManager.register(this.constructionMode);
 
     this.modeManager.selectMode("construction");
@@ -242,6 +274,10 @@ export class Game {
         "forest",
         "mineral",
         "erase",
+      ],
+      availableModes: [
+        { id: "normal", label: "Normal" },
+        { id: "construction", label: "Construcción" },
       ],
     });
 
@@ -269,18 +305,28 @@ export class Game {
       },
 
       // Bloquear interacciones cuando hay un modal
-      () => this.pauseMenuOpen,
+      () => this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation !== null,
 
       // Teclado cuando el menú está abierto
       (event) => {
         if (event.key === "Escape") {
-          this.closePauseMenu();
+          if (this.screen === "settings" && !this.confirmation) {
+            this.closeSettings();
+            return true;
+          }
+          if (this.confirmation) {
+            this.respondToConfirmation("cancel");
+          } else {
+            this.closePauseMenu();
+          }
           return true;
         }
 
         return false;
       },
     );
+
+    this.camera.detachControl();
 
     // --------------------------------------------------
     // Render loop
@@ -366,6 +412,7 @@ export class Game {
 
   private startRenderLoop(): void {
     this.engine.runRenderLoop(() => {
+      if (this.screen !== "gameplay") return;
       const deltaTime = this.engine.getDeltaTime() / 1000;
 
       // Actualizar lógica del juego.
@@ -386,7 +433,10 @@ export class Game {
   // ==================================================
 
   public selectMode(id: GameModeId): void {
-    if (this.pauseMenuOpen) return;
+    if (this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation) return;
+
+    const option = this.getUIConfig().availableModes.find((mode) => mode.id === id);
+    if (!option || option.disabled) return;
 
     this.modeManager.selectMode(id);
   }
@@ -400,7 +450,7 @@ export class Game {
   // ==================================================
 
   public selectTool(tool: ToolId): void {
-    if (this.pauseMenuOpen) return;
+    if (this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation) return;
 
     this.constructionMode.selectTool(tool);
   }
@@ -418,7 +468,7 @@ export class Game {
   }
 
   public resumeSimulation(): void {
-    if (this.pauseMenuOpen) return;
+    if (this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation) return;
 
     this.simulationManager.resume();
   }
@@ -480,7 +530,7 @@ export class Game {
   }
 
   public openPauseMenu(): void {
-    if (this.pauseMenuOpen) return;
+    if (this.screen !== "gameplay" || this.pauseMenuOpen || this.confirmation) return;
 
     this.wasPausedBeforeMenu =
       this.simulationManager.isPaused();
@@ -496,7 +546,7 @@ export class Game {
   }
 
   public closePauseMenu(): void {
-    if (!this.pauseMenuOpen) return;
+    if (!this.pauseMenuOpen || this.confirmation) return;
 
     this.pauseMenuOpen = false;
 
@@ -513,7 +563,7 @@ export class Game {
   public executePauseMenuAction(
     actionId: PauseMenuActionId,
   ): void {
-    if (!this.pauseMenuOpen) return;
+    if (!this.pauseMenuOpen || this.confirmation) return;
 
     // Solo se pueden ejecutar acciones disponibles.
     const option = this.getPauseMenuOptions().find(
@@ -527,14 +577,69 @@ export class Game {
         this.closePauseMenu();
         break;
 
+      case "exit":
+        this.requestConfirmation({
+          title: "¿Salir al menú?",
+          message: "La partida no se ha guardado. Si sales, perderás todo el progreso.",
+          confirmLabel: "Salir sin guardar",
+          cancelLabel: "Seguir en la partida",
+          confirmVariant: "danger",
+          onConfirm: () => this.returnToMainMenu(),
+          onCancel: () => {}, // Mantener abierto el menú de pausa.
+        });
+        break;
+
       // Se implementarán cuando existan
       // los sistemas correspondientes.
       case "settings":
       case "save":
       case "restart":
-      case "exit":
         break;
     }
+  }
+
+  public requestConfirmation(request: ConfirmationDialogRequest): void {
+    if (this.confirmation) return;
+
+    this.wasPausedBeforeConfirmation = this.simulationManager.isPaused();
+    this.confirmation = request;
+    this.simulationManager.pause();
+    this.modeManager.onTileLeave();
+    this.camera.detachControl();
+    this.notifyConfirmationChange();
+  }
+
+  public onConfirmationChange(
+    listener: (state: ConfirmationDialogState | null) => void,
+  ): () => void {
+    this.confirmationListeners.add(listener);
+    listener(this.getConfirmationState());
+    return () => { this.confirmationListeners.delete(listener); };
+  }
+
+  private getConfirmationState(): ConfirmationDialogState | null {
+    if (!this.confirmation) return null;
+    const { onConfirm, onCancel, ...state } = this.confirmation;
+    return state;
+  }
+
+  public respondToConfirmation(response: ConfirmationResponse): void {
+    const request = this.confirmation;
+    if (!request) return;
+
+    this.confirmation = null;
+    if (this.screen === "gameplay" && !this.pauseMenuOpen) {
+      this.camera.attachControl(this.canvas, true);
+      if (!this.wasPausedBeforeConfirmation) this.simulationManager.resume();
+    }
+    this.notifyConfirmationChange();
+    if (response === "confirm") request.onConfirm();
+    else request.onCancel();
+  }
+
+  private notifyConfirmationChange(): void {
+    const state = this.getConfirmationState();
+    for (const listener of this.confirmationListeners) listener(state);
   }
 
   private notifyPauseMenuChange(): void {
@@ -552,6 +657,190 @@ export class Game {
 
   public getUIConfig(): UIConfig {
     return this.uiManager.getConfig();
+  }
+
+  private inspectTile(x: number, y: number): void {
+    const tile = this.gridManager.getTile(x, y);
+    if (!tile) {
+      this.clearInspection();
+      return;
+    }
+
+    const shapes: Record<RoadShape, string> = {
+      isolated: "Tramo aislado",
+      end: "Calle sin salida",
+      straight: "Recta",
+      corner: "Curva",
+      "t-junction": "Intersección en T",
+      cross: "Cruce",
+    };
+    const directions: Record<RoadDirection, string> = {
+      north: "Norte", east: "Este", south: "Sur", west: "Oeste",
+    };
+    const titles: Record<TileType, string> = {
+      empty: "Baldosa vacía", road: "Carretera", house: "Casa",
+      factory: "Fábrica", forest: "Bosque", mineral: "Mineral",
+    };
+    const sections: InspectionState["sections"] = [{
+      title: "Información",
+      fields: [
+        { label: "Coordenadas", value: `${x}, ${y}` },
+        { label: "Tipo de baldosa", value: titles[tile.type] },
+      ],
+    }];
+    if (tile.type === "road") {
+      const connections = (Object.keys(directions) as RoadDirection[])
+        .filter((direction) => tile.roadConnections[direction])
+        .map((direction) => directions[direction]);
+      sections.push({
+        title: "Trazado",
+        fields: [
+          { label: "Tipo", value: shapes[getRoadGeometry(this.gridManager, x, y).shape] },
+          { label: `Conexiones (${connections.length})`, value: connections.join(", ") || "Sin conexiones" },
+        ],
+      });
+    }
+    this.inspection = {
+      title: titles[tile.type],
+      closeLabel: "Cerrar",
+      sections,
+    };
+    this.selectionHighlight.show(x, y);
+    this.notifyInspectionChange();
+  }
+
+  public clearInspection(): boolean {
+    if (!this.inspection) return false;
+    this.inspection = null;
+    this.selectionHighlight.hide();
+    this.notifyInspectionChange();
+    return true;
+  }
+
+  public onInspectionChange(listener: (state: InspectionState | null) => void): () => void {
+    this.inspectionListeners.add(listener);
+    listener(this.inspection ? structuredClone(this.inspection) : null);
+    return () => { this.inspectionListeners.delete(listener); };
+  }
+
+  private notifyInspectionChange(): void {
+    for (const listener of this.inspectionListeners) {
+      listener(this.inspection ? structuredClone(this.inspection) : null);
+    }
+  }
+
+  public getNavigationState(): NavigationState {
+    switch (this.screen) {
+      case "main-menu":
+        return { screen: "main-menu", menu: this.getMainMenuState() };
+      case "settings":
+        return { screen: "settings", settings: this.getSettingsState() };
+      case "gameplay":
+        return { screen: "gameplay" };
+    }
+  }
+
+  private getSettingsState(): SettingsState {
+    return {
+      title: "Ajustes",
+      notice: "Vista previa: estas opciones son ejemplos y todavía no se pueden modificar ni aplicar.",
+      backLabel: "Volver al menú",
+      resetLabel: "Restablecer ajustes",
+      activeTab: this.settingsTab,
+      tabs: structuredClone(settingsTabs),
+    };
+  }
+
+  public getMainMenuState(): MainMenuState {
+    return {
+      title: "Project Marble",
+      description: "Empieza una ciudad desde cero.",
+      notice: "Las partidas todavía no se pueden guardar.",
+      options: [
+        { id: "new-game", label: "Nueva partida" },
+        { id: "load-game", label: "Cargar partida", disabled: true },
+        { id: "scenario-editor", label: "Editor de escenarios", disabled: true },
+        { id: "settings", label: "Ajustes" },
+      ],
+    };
+  }
+
+  public onNavigationChange(listener: (state: NavigationState) => void): () => void {
+    this.navigationListeners.add(listener);
+    listener(this.getNavigationState());
+    return () => { this.navigationListeners.delete(listener); };
+  }
+
+  public executeMainMenuAction(actionId: MainMenuActionId): void {
+    if (this.screen !== "main-menu" || this.confirmation) return;
+    const option = this.getMainMenuState().options.find((item) => item.id === actionId);
+    if (!option || option.disabled) return;
+
+    switch (actionId) {
+      case "settings":
+        this.screen = "settings";
+        this.notifyNavigationChange();
+        break;
+      case "new-game":
+        this.screen = "gameplay";
+        this.modeManager.selectMode("construction");
+        this.camera.alpha = -Math.PI / 2;
+        this.camera.beta = Math.PI / 2.5;
+        this.camera.radius = 50;
+        this.camera.setTarget(Vector3.Zero());
+        this.camera.attachControl(this.canvas, true);
+        this.engine.resize();
+        this.simulationManager.resume();
+        this.notifyNavigationChange();
+        break;
+    }
+  }
+
+  private returnToMainMenu(): void {
+    this.clearInspection();
+    this.simulationManager.pause();
+    this.modeManager.selectMode("normal");
+    this.camera.detachControl();
+    this.vehicleManager.clear();
+    this.vehicleRenderer.update([]);
+    this.mobilityManager.clear();
+    this.gridManager.clear();
+    this.tileRenderer.dispose();
+    this.pauseMenuOpen = false;
+    this.wasPausedBeforeMenu = false;
+    this.screen = "main-menu";
+    this.notifyPauseMenuChange();
+    this.notifyNavigationChange();
+  }
+
+  public selectSettingsTab(tab: SettingsTabId): void {
+    if (this.screen !== "settings" || !settingsTabs.some((item) => item.id === tab)) return;
+    this.settingsTab = tab;
+    this.notifyNavigationChange();
+  }
+
+  public closeSettings(): void {
+    if (this.screen !== "settings" || this.confirmation) return;
+    this.screen = "main-menu";
+    this.notifyNavigationChange();
+  }
+
+  public requestSettingsReset(): void {
+    if (this.screen !== "settings" || this.confirmation) return;
+    this.requestConfirmation({
+      title: "¿Restablecer ajustes?",
+      message: "Se restaurarán los valores predeterminados. Por ahora esta acción es una vista previa y no modifica ningún ajuste.",
+      confirmLabel: "Restablecer",
+      cancelLabel: "Cancelar",
+      confirmVariant: "danger",
+      onConfirm: () => {}, // Pendiente de implementar la configuración real.
+      onCancel: () => {},
+    });
+  }
+
+  private notifyNavigationChange(): void {
+    const state = this.getNavigationState();
+    for (const listener of this.navigationListeners) listener(state);
   }
 
   // ==================================================
@@ -578,9 +867,15 @@ export class Game {
     // Renderizadores.
     this.vehicleRenderer.dispose();
     this.tileHighlight.dispose();
+    this.selectionHighlight.dispose();
+    this.tileRenderer.dispose();
 
     // Eventos UI.
     this.pauseMenuListeners.clear();
+    this.inspectionListeners.clear();
+    this.navigationListeners.clear();
+    this.confirmation = null;
+    this.confirmationListeners.clear();
 
     // Babylon.js.
     this.scene.dispose();

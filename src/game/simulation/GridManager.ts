@@ -66,6 +66,10 @@ export class GridManager {
   // Acceso y modificación
   // --------------------------------------------------
 
+  clear(): void {
+    this.grid = this.createEmptyGrid(this.width, this.height);
+  }
+
   getTile(x: number, y: number): Tile | null {
     if (!this.isInside(x, y)) {
       return null;

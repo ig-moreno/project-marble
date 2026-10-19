@@ -88,7 +88,6 @@ export class PauseMenuManager {
           {
             id: "exit",
             label: "Salir al menú",
-            disabled: true,
             variant: "danger",
           },
         ];

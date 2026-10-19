@@ -177,8 +177,13 @@ export class MobilityManager {
 
   public dispose(): void {
     this.unsubscribeVehicleArrived();
+    this.clear();
+  }
+
+  public clear(): void {
     this.people.clear();
     this.buildings.clear();
     this.trips.clear();
+    this.nextTripId = 1;
   }
 }
