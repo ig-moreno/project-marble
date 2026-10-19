@@ -75,27 +75,6 @@
         Construcción
       </button>
     </div>
-    <button onclick={() => game?.spawnTestVehicle()} style="pointer-events: auto; background-color: red">
-      🚗 Crear vehículo
-    </button>
-    <button
-      onclick={() => game?.testBuildingConnection()} style="pointer-events: auto; background-color: red"
-    >
-      Comprobar conexión
-    </button>
-    <button
-      onclick={() => game?.requestTestWorkTrip()} style="pointer-events: auto; background-color: red"
-    >
-      Ir al trabajo
-    </button>
-
-    <button
-      onclick={() => game?.requestTestHomeTrip()} style="pointer-events: auto; background-color: red"
-    >
-      Volver a casa
-    </button>
-
-
     {#if activeMode === "construction" && uiConfig?.components.tilePicker}
       <TilePicker
         tools={uiConfig.availableTools}
