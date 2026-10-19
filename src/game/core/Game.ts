@@ -26,21 +26,14 @@ import { InputManager } from "../input/InputManager";
 
 import { SimulationManager } from "../simulation/SimulationManager";
 import { VehicleManager } from "../simulation/vehicles/VehicleManager";
-import { findRoadPath } from "../simulation/vehicles/RoadPathFinder";
 
 import type { GameModeId } from "../modes/GameMode";
 import type { ToolId } from "../modes/construction/tools/types";
 
 import { PauseMenuManager } from "../ui/pause/PauseMenuManager";
-import { BuildingPathResolver } from "../simulation/buildings/BuildingPathResolver";
 
 import { MobilityManager } from "../simulation/mobility/MobilityManager";
-import type { Trip } from "../simulation/mobility/Trip";
 
-import {
-  createTestScenario,
-  type TestScenarioData,
-} from "../scenarios/TestScenario";
 
 import type {
   PauseMenuActionId,
@@ -112,12 +105,6 @@ export class Game {
   >();
 
   // ==================================================
-  // ESCENARIOS
-  // ==================================================
-
-  private readonly testScenario: TestScenarioData;
-
-  // ==================================================
   // EVENTOS
   // ==================================================
 
@@ -135,20 +122,7 @@ export class Game {
     // --------------------------------------------------
 
     this.gridManager = new GridManager(20, 20);
-    this.testScenario = createTestScenario(
-      this.gridManager,
-    );
-
-    console.log(
-      "Home:",
-      this.gridManager.getTile(-6, 0),
-    );
-
-    console.log(
-      "Workplace:",
-      this.gridManager.getTile(5, 0),
-    );
-
+    // Una partida nueva comienza con el mapa vacío.
 
     // --------------------------------------------------
     // Babylon.js
@@ -215,22 +189,7 @@ export class Game {
       this.vehicleManager,
     );
 
-    // Registrar los edificios del escenario.
-    this.mobilityManager.registerBuilding(
-      this.testScenario.home,
-    );
-
-    this.mobilityManager.registerBuilding(
-      this.testScenario.workplace,
-    );
-
-    // Crear la primera persona de prueba.
-    this.mobilityManager.registerPerson({
-      id: "person-001",
-      homeId: this.testScenario.home.id,
-      workplaceId: this.testScenario.workplace.id,
-      currentBuildingId: this.testScenario.home.id,
-    });
+    // Los edificios y habitantes se crearán desde la partida.
 
     // Actualizar los vehículos antes de comprobar
     // si han finalizado sus viajes.
@@ -469,63 +428,6 @@ export class Game {
   }
 
   // ==================================================
-  // VEHÍCULOS
-  // ==================================================
-
-  
-  public spawnTestVehicle(): boolean {
-    if (this.pauseMenuOpen) return false;
-
-    const roads = this.gridManager.getTilesByType("road");
-
-    if (roads.length < 2) {
-      return false;
-    }
-
-    let bestPath: { x: number; y: number }[] | null = null;
-
-    // Buscar la ruta más larga entre carreteras conectadas.
-    for (const start of roads) {
-      for (const end of roads) {
-        if (
-          start.x === end.x &&
-          start.y === end.y
-        ) {
-          continue;
-        }
-
-        const path = findRoadPath(
-          this.gridManager,
-          { x: start.x, y: start.y },
-          { x: end.x, y: end.y },
-        );
-
-        if (
-          path &&
-          (!bestPath || path.length > bestPath.length)
-        ) {
-          bestPath = path;
-        }
-      }
-    }
-
-    if (!bestPath || bestPath.length < 2) {
-      return false;
-    }
-
-    const start = bestPath[0];
-    const destination = bestPath[bestPath.length - 1];
-
-    return (
-      this.vehicleManager.createVehicle(
-        start,
-        destination,
-      ) !== null
-    );
-  }
-
-
-  // ==================================================
   // MENÚ DE PAUSA
   // ==================================================
 
@@ -684,85 +586,5 @@ export class Game {
     this.scene.dispose();
     this.engine.dispose();
   }
-
-   // ==================================================
-  // TEMP
-  // ==================================================
-  public testBuildingConnection(): boolean {
-    if (this.pauseMenuOpen) return false;
-
-    const resolver = new BuildingPathResolver(
-      this.gridManager,
-    );
-
-    const path = resolver.findPath(
-      {
-        x: this.testScenario.home.x,
-        y: this.testScenario.home.y,
-      },
-      {
-        x: this.testScenario.workplace.x,
-        y: this.testScenario.workplace.y,
-      },
-    );
-
-    if (!path) {
-      console.log(
-        "No existe una ruta entre casa y fábrica.",
-      );
-      return false;
-    }
-
-    console.log(
-      "Ruta entre casa y fábrica:",
-      path,
-    );
-
-    return true;
-  }
-
-  
-  public requestTestWorkTrip(): Trip | null {
-    if (this.pauseMenuOpen) return null;
-
-    const trip = this.mobilityManager.requestWorkTrip(
-      "person-001",
-    );
-
-    if (!trip) {
-      console.log(
-        "La persona ya tiene un viaje activo o no existe.",
-      );
-      return null;
-    }
-
-    console.log(
-      `Viaje ${trip.id}: ${trip.status}`,
-    );
-
-    return trip;
-  }
-
-  
-  public requestTestHomeTrip(): Trip | null {
-    if (this.pauseMenuOpen) return null;
-
-    const trip = this.mobilityManager.requestHomeTrip(
-      "person-001",
-    );
-
-    if (!trip) {
-      console.log(
-        "La persona no puede iniciar el viaje a casa.",
-      );
-      return null;
-    }
-
-    console.log(`Viaje ${trip.id}: ${trip.status}`);
-
-    return trip;
-  }
-
-    
 
 }
