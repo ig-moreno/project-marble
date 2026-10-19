@@ -24,6 +24,14 @@ export class TileRenderer {
 
   ) { }
 
+  public renderAll(): void {
+    for (const tile of this.gridManager.tiles()) {
+      if (tile.type === "empty") continue;
+
+      this.updateTile(tile);
+    }
+  }
+
   public updateTile(tile: Tile): void {
     const key = `${tile.x},${tile.y}`;
 

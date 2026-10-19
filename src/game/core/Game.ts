@@ -32,6 +32,15 @@ import type { GameModeId } from "../modes/GameMode";
 import type { ToolId } from "../modes/construction/tools/types";
 
 import { PauseMenuManager } from "../ui/pause/PauseMenuManager";
+import { BuildingPathResolver } from "../simulation/buildings/BuildingPathResolver";
+
+import { MobilityManager } from "../simulation/mobility/MobilityManager";
+import type { Trip } from "../simulation/mobility/Trip";
+
+import {
+  createTestScenario,
+  type TestScenarioData,
+} from "../scenarios/TestScenario";
 
 import type {
   PauseMenuActionId,
@@ -73,6 +82,7 @@ export class Game {
 
   private readonly simulationManager: SimulationManager;
   private readonly vehicleManager: VehicleManager;
+  private readonly mobilityManager: MobilityManager;
 
   // ==================================================
   // MODOS Y HERRAMIENTAS
@@ -102,6 +112,12 @@ export class Game {
   >();
 
   // ==================================================
+  // ESCENARIOS
+  // ==================================================
+
+  private readonly testScenario: TestScenarioData;
+
+  // ==================================================
   // EVENTOS
   // ==================================================
 
@@ -119,6 +135,20 @@ export class Game {
     // --------------------------------------------------
 
     this.gridManager = new GridManager(20, 20);
+    this.testScenario = createTestScenario(
+      this.gridManager,
+    );
+
+    console.log(
+      "Home:",
+      this.gridManager.getTile(-6, 0),
+    );
+
+    console.log(
+      "Workplace:",
+      this.gridManager.getTile(5, 0),
+    );
+
 
     // --------------------------------------------------
     // Babylon.js
@@ -159,6 +189,9 @@ export class Game {
       this.gridManager,
     );
 
+    // Renderizar el estado inicial del mundo.
+    this.tileRenderer.renderAll();
+
     this.vehicleRenderer = new VehicleRenderer(
       this.scene,
       this.gridManager.width,
@@ -170,14 +203,41 @@ export class Game {
     // --------------------------------------------------
 
     this.simulationManager = new SimulationManager();
+    
 
+    
     this.vehicleManager = new VehicleManager(
       this.gridManager,
     );
 
+    this.mobilityManager = new MobilityManager(
+      this.gridManager,
+      this.vehicleManager,
+    );
+
+    // Registrar los edificios del escenario.
+    this.mobilityManager.registerBuilding(
+      this.testScenario.home,
+    );
+
+    this.mobilityManager.registerBuilding(
+      this.testScenario.workplace,
+    );
+
+    // Crear la primera persona de prueba.
+    this.mobilityManager.registerPerson({
+      id: "person-001",
+      homeId: this.testScenario.home.id,
+      workplaceId: this.testScenario.workplace.id,
+      currentBuildingId: this.testScenario.home.id,
+    });
+
+    // Actualizar los vehículos antes de comprobar
+    // si han finalizado sus viajes.
     this.simulationManager.register((deltaTime) => {
       this.vehicleManager.update(deltaTime);
     });
+
 
     // --------------------------------------------------
     // Modos
@@ -292,7 +352,7 @@ export class Game {
       "camera",
       -Math.PI / 2,
       Math.PI / 2.5,
-      15,
+      50,
       Vector3.Zero(),
       this.scene,
     );
@@ -300,7 +360,7 @@ export class Game {
     camera.attachControl(this.canvas, true);
 
     camera.lowerRadiusLimit = 2;
-    camera.upperRadiusLimit = 50;
+    camera.upperRadiusLimit = 200;
 
     const light = new HemisphericLight(
       "light",
@@ -611,6 +671,7 @@ export class Game {
     // Simulación.
     this.simulationManager.dispose();
     this.vehicleManager.clear();
+    this.mobilityManager.dispose();
 
     // Renderizadores.
     this.vehicleRenderer.dispose();
@@ -623,4 +684,85 @@ export class Game {
     this.scene.dispose();
     this.engine.dispose();
   }
+
+   // ==================================================
+  // TEMP
+  // ==================================================
+  public testBuildingConnection(): boolean {
+    if (this.pauseMenuOpen) return false;
+
+    const resolver = new BuildingPathResolver(
+      this.gridManager,
+    );
+
+    const path = resolver.findPath(
+      {
+        x: this.testScenario.home.x,
+        y: this.testScenario.home.y,
+      },
+      {
+        x: this.testScenario.workplace.x,
+        y: this.testScenario.workplace.y,
+      },
+    );
+
+    if (!path) {
+      console.log(
+        "No existe una ruta entre casa y fábrica.",
+      );
+      return false;
+    }
+
+    console.log(
+      "Ruta entre casa y fábrica:",
+      path,
+    );
+
+    return true;
+  }
+
+  
+  public requestTestWorkTrip(): Trip | null {
+    if (this.pauseMenuOpen) return null;
+
+    const trip = this.mobilityManager.requestWorkTrip(
+      "person-001",
+    );
+
+    if (!trip) {
+      console.log(
+        "La persona ya tiene un viaje activo o no existe.",
+      );
+      return null;
+    }
+
+    console.log(
+      `Viaje ${trip.id}: ${trip.status}`,
+    );
+
+    return trip;
+  }
+
+  
+  public requestTestHomeTrip(): Trip | null {
+    if (this.pauseMenuOpen) return null;
+
+    const trip = this.mobilityManager.requestHomeTrip(
+      "person-001",
+    );
+
+    if (!trip) {
+      console.log(
+        "La persona no puede iniciar el viaje a casa.",
+      );
+      return null;
+    }
+
+    console.log(`Viaje ${trip.id}: ${trip.status}`);
+
+    return trip;
+  }
+
+    
+
 }

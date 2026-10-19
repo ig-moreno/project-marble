@@ -12,6 +12,7 @@
   const labels: Record<ToolId, string> = {
     road: "Carretera",
     house: "Casa",
+    factory: "Fábrica",
     forest: "Bosque",
     mineral: "Mineral",
     erase: "Borrar",

@@ -7,8 +7,14 @@ import {
   type RoadPosition,
 } from "./RoadPathFinder";
 
+import type {
+  VehicleArrivedEvent,
+  VehicleArrivedListener,
+} from "./VehicleEvents";
+
 export class VehicleManager {
-  private readonly vehicles = new Map<string, Vehicle>();
+  private readonly vehicles = new Map<string, Vehicle> ();
+  private readonly arrivalListeners = new Set<VehicleArrivedListener> ();
   private nextId = 1;
 
   constructor(private readonly grid: GridManager) {}
@@ -81,12 +87,48 @@ export class VehicleManager {
 
     if (vehicle.targetIndex >= vehicle.path.length) {
       this.vehicles.delete(vehicle.id);
+      this.notifyVehicleArrived(vehicle.id);
+      return;
     }
   }
 
   getVehicles(): readonly Vehicle[] {
     return [...this.vehicles.values()];
   }
+
+  
+  public onVehicleArrived(
+    listener: VehicleArrivedListener,
+  ): () => void {
+    this.arrivalListeners.add(listener);
+
+    return () => {
+      this.arrivalListeners.delete(listener);
+    };
+  }
+
+  private notifyVehicleArrived(
+    vehicleId: string,
+  ): void {
+    console.log(
+      "[VehicleManager] VehicleArrived:",
+      vehicleId,
+    );
+
+    const event: VehicleArrivedEvent = {
+      vehicleId,
+    };
+
+    for (const listener of this.arrivalListeners) {
+      listener(event);
+    }
+  }
+  public removeVehicleForTest(
+    vehicleId: string,
+  ): void {
+    this.vehicles.delete(vehicleId);
+  }
+
 
   clear(): void {
     this.vehicles.clear();
